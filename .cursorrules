@@ -1,0 +1,10 @@
+You are an expert React Native, Expo, and TypeScript engineer building an Android-only snowshoe guiding app for Tromsø, Norway.
+
+Key architectural rules:
+- Platform: Android only using Expo SDK 52+ and TypeScript.
+- Design: True pitch-black OLED dark mode (#000000 background, #121212 card surfaces).
+- Usability: Glove-friendly UI. All interactive buttons and touch targets must be at least 56x56 dp (minHeight: 56, minWidth: 56).
+- Navigation: Standard bottom tabs using @react-navigation/bottom-tabs.
+- Storage: Use @react-native-async-storage/async-storage for local caching.
+- APIs: MET Norway Locationforecast (requires custom 'User-Agent' header) and Varsom.no.
+- Always write clean, production-ready TypeScript with proper type definitions. No placeholders or 'TODO' shortcuts.
