@@ -1,13 +1,9 @@
 import type { ChecklistId } from './checklists';
+import { ROUTE_CATALOG, type GeoPoint } from './routes';
 
+export type { GeoPoint };
 export type ActivityType = 'snowshoe';
 export type ElevationMode = 'trailhead' | 'summit';
-
-export interface GeoPoint {
-  latitude: number;
-  longitude: number;
-  elevationMeters: number;
-}
 
 export interface TourLocation {
   id: string;
@@ -19,48 +15,21 @@ export interface TourLocation {
   checklistId: ChecklistId;
   trailhead: GeoPoint;
   summit: GeoPoint | null;
-  /** Compass bearing in degrees (0–360) heading uphill toward the main route/summit */
   ascentBearingDeg: number;
 }
 
-export const LOCATIONS: readonly TourLocation[] = [
-  {
-    id: 'charlottenlund',
-    name: 'Tromsøya Easy (2.5h)',
-    place: 'Charlottenlund',
-    area: 'Tromsøya',
-    durationLabel: '2.5h',
-    activity: 'snowshoe',
-    checklistId: 'standard',
-    trailhead: { latitude: 69.664, longitude: 18.94, elevationMeters: 100 },
-    summit: null,
-    ascentBearingDeg: 350, // Gentle northbound loop
-  },
-  {
-    id: 'tverrfjellet',
-    name: 'Kvaløya Mountain (5h)',
-    place: 'Tverrfjellet',
-    area: 'Kattfjordeidet',
-    durationLabel: '5h',
-    activity: 'snowshoe',
-    checklistId: 'mountain',
-    trailhead: { latitude: 69.663, longitude: 18.423, elevationMeters: 180 },
-    summit: { latitude: 69.663, longitude: 18.423, elevationMeters: 675 },
-    ascentBearingDeg: 145, // Climbing south-east onto the ridge
-  },
-  {
-    id: 'rundfjellet',
-    name: 'Kvaløya Mountain (5h)',
-    place: 'Rundfjellet',
-    area: 'Radio Tower',
-    durationLabel: '5h',
-    activity: 'snowshoe',
-    checklistId: 'mountain',
-    trailhead: { latitude: 69.65, longitude: 18.72, elevationMeters: 60 },
-    summit: { latitude: 69.65, longitude: 18.72, elevationMeters: 760 },
-    ascentBearingDeg: 70, // Climbing east-northeast to the radio mast
-  },
-];
+export const LOCATIONS: readonly TourLocation[] = ROUTE_CATALOG.map((r) => ({
+  id: r.id,
+  name: r.name,
+  place: r.shortLabel,
+  area: r.area,
+  durationLabel: `${(r.defaultDurationMinutes / 60).toFixed(1).replace(/\.0$/, '')}h`,
+  activity: 'snowshoe',
+  checklistId: r.checklistId,
+  trailhead: r.weatherPoint,
+  summit: r.summit,
+  ascentBearingDeg: r.ascentBearingDeg,
+}));
 
 export const KATTFJORDEIDET_CAMERAS_URL = 'https://www.vegvesen.no/trafikk/webkamera';
 

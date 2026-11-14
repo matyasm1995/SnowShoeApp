@@ -1,8 +1,8 @@
-import type { GeoPoint } from '../data/locations';
+import { CONFIG } from '../config';
+import type { GeoPoint } from '../data/routes';
 import { loadJson, saveJson } from './persistence';
 
-// Keep your real email here
-export const MET_USER_AGENT = 'TromsoSnowshoeGuide/1.0 (https://github.com; arcticguide@nordicoutdoor.no)';
+export const MET_USER_AGENT = CONFIG.weather.userAgent;
 
 const FORECAST_URL = 'https://api.met.no/weatherapi/locationforecast/2.0/compact';
 const REQUEST_TIMEOUT_MS = 12000;
@@ -34,16 +34,37 @@ export class ForecastUnavailableError extends Error {
 }
 
 function cacheKey(point: GeoPoint): string {
-  return `forecast:v2:${point.latitude.toFixed(4)}:${point.longitude.toFixed(4)}:${Math.round(point.elevationMeters)}`;
+  return `forecast:v3:${point.latitude.toFixed(4)}:${point.longitude.toFixed(4)}:${Math.round(point.elevationMeters)}`;
 }
 
-function parseHourly(timeseries: any[]): HourlyForecastItem[] {
+interface RawTimeseriesEntry {
+  time: string;
+  data?: {
+    instant?: {
+      details?: {
+        air_temperature?: number;
+        wind_speed?: number;
+        wind_gust?: number;
+        wind_from_direction?: number;
+        cloud_area_fraction?: number;
+      };
+    };
+    next_1_hours?: {
+      summary?: { symbol_code?: string };
+      details?: { precipitation_amount?: number };
+    };
+    next_6_hours?: {
+      summary?: { symbol_code?: string };
+    };
+  };
+}
+
+function parseHourly(timeseries: RawTimeseriesEntry[]): HourlyForecastItem[] {
   const now = Date.now();
-  // Filter for next 24 hours
   return timeseries
     .filter((entry) => {
       const t = Date.parse(entry.time);
-      return Number.isFinite(t) && t >= now - 3600000 && t <= now + 24 * 3600000;
+      return Number.isFinite(t) && t >= now - 3600000 && t <= now + 48 * 3600000;
     })
     .map((entry) => {
       const details = entry.data?.instant?.details ?? {};
@@ -87,7 +108,9 @@ export async function fetchForecast(point: GeoPoint): Promise<ForecastResult> {
       throw new ForecastUnavailableError(`MET Norway error ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as {
+      properties?: { timeseries?: RawTimeseriesEntry[] };
+    };
     const series = data?.properties?.timeseries ?? [];
     const hourly = parseHourly(series);
 
@@ -107,7 +130,7 @@ export async function fetchForecast(point: GeoPoint): Promise<ForecastResult> {
       fromCache: false,
       point,
     };
-  } catch (error) {
+  } catch {
     const cached = await loadJson<{ fetchedAt: string; hourly: HourlyForecastItem[] }>(key);
     if (cached && cached.hourly && cached.hourly.length > 0) {
       return {
