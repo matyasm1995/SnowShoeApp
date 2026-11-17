@@ -7,6 +7,7 @@ export const TROMSO_COORDINATES = {
 
 const WIND_CHILL_MIN_KMH = 4.8;
 const WIND_CHILL_MAX_TEMP_C = 10;
+const STANDARD_LAPSE_C_PER_M = 0.0065;
 
 export type ExposureLevel =
   | 'comfortable'
@@ -56,6 +57,13 @@ export type WindRelativeExposure =
   | 'Tailwind (At your back)'
   | 'Crosswind (Left cheek)'
   | 'Crosswind (Right cheek)';
+
+export interface SnowlineAssessment {
+  snowlineMeters: number | null;
+  isBelowSeaLevel: boolean;
+  displayValue: string;
+  label: string;
+}
 
 export function calculateWindChill(tempC: number, windSpeedKmh: number): number {
   if (tempC > WIND_CHILL_MAX_TEMP_C || windSpeedKmh < WIND_CHILL_MIN_KMH) {
@@ -133,7 +141,7 @@ export function calculateWindRelativeExposure(
   windFromDeg: number | null
 ): WindRelativeExposure {
   if (windFromDeg === null) return 'Crosswind (Left cheek)';
-  const diff = ((windFromDeg - trailBearingDeg + 360) % 360);
+  const diff = (windFromDeg - trailBearingDeg + 360) % 360;
 
   if (diff <= 45 || diff >= 315) {
     return 'Headwind (In your face)';
@@ -152,40 +160,57 @@ export function estimateSnowlineMeters(
   trailheadTemp: number,
   summitElev: number | null,
   summitTemp: number | null
-): { snowlineMeters: number | null; label: string } {
-  if (!summitElev || summitTemp === null) {
-    if (trailheadTemp <= 0.5) return { snowlineMeters: trailheadElev, label: 'Snow down to parking (Sea level)' };
-    return { snowlineMeters: null, label: 'Rain / Wet at trail level' };
+): SnowlineAssessment {
+  const hasRealSlope =
+    summitElev !== null &&
+    summitTemp !== null &&
+    summitElev > trailheadElev &&
+    trailheadTemp - summitTemp > 0.2;
+
+  const lapse = hasRealSlope
+    ? (trailheadTemp - summitTemp!) / (summitElev! - trailheadElev)
+    : STANDARD_LAPSE_C_PER_M;
+
+  // Freezing elevation (0°C isotherm) using real slope between parking & summit when applicable
+  let freezingElev: number;
+  if (trailheadTemp <= 0) {
+    // Below or at parking: extrapolate downward to sea level with standard lapse
+    const seaLevelTemp = trailheadTemp + trailheadElev * STANDARD_LAPSE_C_PER_M;
+    if (seaLevelTemp <= 0) {
+      return {
+        snowlineMeters: Math.round(seaLevelTemp / STANDARD_LAPSE_C_PER_M),
+        isBelowSeaLevel: true,
+        displayValue: 'Below 0 m',
+        label: `Frozen down to fjord (${seaLevelTemp.toFixed(1)}°C at sea level)`,
+      };
+    }
+    freezingElev = Math.round(seaLevelTemp / STANDARD_LAPSE_C_PER_M);
+    return {
+      snowlineMeters: freezingElev,
+      isBelowSeaLevel: false,
+      displayValue: `${freezingElev} m`,
+      label: `Below parking (${trailheadElev}m) · Snow at trailhead`,
+    };
   }
 
-  if (trailheadTemp <= 0.5) {
-    return { snowlineMeters: trailheadElev, label: 'Snow all the way down to parking' };
-  }
-  if (summitTemp > 0.5) {
-    return { snowlineMeters: null, label: 'Above summit (Rain even at top)' };
-  }
+  freezingElev = Math.round(trailheadElev + trailheadTemp / lapse);
 
-  const elevDiff = summitElev - trailheadElev;
-  const tempDiff = trailheadTemp - summitTemp;
-  if (tempDiff <= 0) {
-    return { snowlineMeters: trailheadElev, label: 'Snow across route' };
+  if (summitElev !== null && summitTemp !== null && summitTemp > 0) {
+    const aboveTop = Math.round(summitElev + summitTemp / STANDARD_LAPSE_C_PER_M);
+    return {
+      snowlineMeters: aboveTop,
+      isBelowSeaLevel: false,
+      displayValue: `${aboveTop} m`,
+      label: `Above summit (${summitElev}m) · Rain across route`,
+    };
   }
-
-  const lapse = tempDiff / elevDiff;
-  const metersAboveTrailhead = trailheadTemp / lapse;
-  const snowline = Math.round(trailheadElev + metersAboveTrailhead);
 
   return {
-    snowlineMeters: snowline,
-    label: `Freezing line at ~${snowline}m (Rain below, snow above)`,
+    snowlineMeters: freezingElev,
+    isBelowSeaLevel: false,
+    displayValue: `${freezingElev} m`,
+    label: `0°C freezing line (wet below, snow above)`,
   };
-}
-
-export function estimateFreshSnowCm(precipMm: number, tempC: number): number {
-  if (tempC > 1.0 || precipMm <= 0) return 0;
-  // Cold Arctic snow expansion ratio ~ 1.2 to 1.5 cm per mm
-  const ratio = tempC < -4 ? 1.4 : 1.1;
-  return Math.round(precipMm * ratio * 10) / 10;
 }
 
 export function get24HourSunCurve(date = new Date()): SunCurvePoint[] {

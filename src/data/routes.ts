@@ -5,7 +5,8 @@ export type TourCategory =
   | 'coffee_snowshoe'
   | 'hill_hike'
   | 'ski'
-  | 'fatbike';
+  | 'fatbike'
+  | 'bridge';
 
 export interface GeoPoint {
   latitude: number;
@@ -42,6 +43,7 @@ export interface ActivityRoute {
   driveMinutesEachWay: number;
   backAtParkingBeforeEndMinutes?: number;
   returnNote: string;
+  usesBridgeWarning: boolean;
   hasActiveTracking: boolean;
   trackingMode: 'elevation' | 'distance' | 'none';
   trailhead: GeoPoint;
@@ -52,6 +54,14 @@ export interface ActivityRoute {
   gates: readonly CheckpointGate[];
   track: readonly TrackPoint[];
 }
+
+export const SANDNESSUNDBRUA_POINT: GeoPoint = {
+  latitude: 69.6910,
+  longitude: 18.9025,
+  elevationMeters: 41,
+};
+
+export const SANDNESSUNDBRUA_GUST_WARNING_MS = 20;
 
 export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -108,30 +118,30 @@ function buildInterpolatedTrack(
 }
 
 function buildMeasuredTrack(
-  coords: readonly (readonly [number, number, number])[]
+  coords: readonly (readonly [number, number, number])[],
+  targetTotalDistanceKm?: number
 ): TrackPoint[] {
   if (coords.length === 0) return [];
+  const rawCum: number[] = [0];
   let total = 0;
-  const out: TrackPoint[] = [];
 
-  for (let i = 0; i < coords.length; i++) {
+  for (let i = 1; i < coords.length; i++) {
+    const prev = coords[i - 1];
     const curr = coords[i];
-    if (!curr) continue;
-    if (i > 0) {
-      const prev = coords[i - 1];
-      if (prev) {
-        total += haversineKm(prev[0], prev[1], curr[0], curr[1]);
-      }
-    }
-    out.push({
-      lat: curr[0],
-      lon: curr[1],
-      ele: Math.round(curr[2]),
-      cumDistanceKm: Math.round(total * 100) / 100,
-    });
+    if (!prev || !curr) continue;
+    total += haversineKm(prev[0], prev[1], curr[0], curr[1]);
+    rawCum.push(total);
   }
 
-  return out;
+  const scale =
+    targetTotalDistanceKm && total > 0 ? targetTotalDistanceKm / total : 1;
+
+  return coords.map((curr, i) => ({
+    lat: curr[0],
+    lon: curr[1],
+    ele: Math.round(curr[2]),
+    cumDistanceKm: Math.round((rawCum[i] ?? 0) * scale * 100) / 100,
+  }));
 }
 
 const TVERRFJELLET_RAW: readonly (readonly [number, number])[] = [
@@ -233,12 +243,12 @@ const COFFEE_HIKE_MEASURED_RAW: readonly (readonly [number, number, number])[] =
 
 const tverrfjelletTrack = buildInterpolatedTrack(TVERRFJELLET_RAW, 105, 524);
 const rundfjelletTrack = buildInterpolatedTrack(RUNDFJELLET_NORTH_RAW, 10, 472);
-const fatbikeTrack = buildMeasuredTrack(FATBIKE_MEASURED_RAW);
+const fatbikeTrack = buildMeasuredTrack(FATBIKE_MEASURED_RAW, 10.33);
 const coffeeTrack = buildMeasuredTrack(COFFEE_HIKE_MEASURED_RAW);
 
 const tverrDist = tverrfjelletTrack[tverrfjelletTrack.length - 1]?.cumDistanceKm ?? 1.9;
 const rundDist = rundfjelletTrack[rundfjelletTrack.length - 1]?.cumDistanceKm ?? 2.3;
-const fatbikeDist = fatbikeTrack[fatbikeTrack.length - 1]?.cumDistanceKm ?? 9.5;
+const fatbikeDist = fatbikeTrack[fatbikeTrack.length - 1]?.cumDistanceKm ?? 10.33;
 const coffeeDist = coffeeTrack[coffeeTrack.length - 1]?.cumDistanceKm ?? 1.7;
 
 export const ROUTE_CATALOG: readonly ActivityRoute[] = [
@@ -254,6 +264,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     backAtParkingBeforeEndMinutes: 45,
     returnNote:
       '45 min drive each way. Gate 2 at the top (524 m / +2h 00m) is your reminder to head down and reach the car ≥45 min before tour end.',
+    usesBridgeWarning: true,
     hasActiveTracking: true,
     trackingMode: 'elevation',
     trailhead: { latitude: 69.644616, longitude: 18.470580, elevationMeters: 105 },
@@ -292,6 +303,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     backAtParkingBeforeEndMinutes: 30,
     returnNote:
       '30 min drive each way. Watch Gate 1 (250 m / +1h 15m) & Gate 2 (400 m / +1h 45m); start descending from 472 m by +2h 15m.',
+    usesBridgeWarning: true,
     hasActiveTracking: true,
     trackingMode: 'elevation',
     trailhead: { latitude: 69.646070, longitude: 18.732154, elevationMeters: 10 },
@@ -335,6 +347,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     driveMinutesEachWay: 0,
     returnNote:
       'Starts at Tromsø Outdoor shop (0 min drive). Reach the northern turning point in +1h 30m so you are back on time.',
+    usesBridgeWarning: false,
     hasActiveTracking: true,
     trackingMode: 'distance',
     trailhead: { latitude: 69.649410, longitude: 18.958100, elevationMeters: 5 },
@@ -347,7 +360,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
         id: 'fb-mid',
         label: 'Prestvannet / Charlottenlund Ridge',
         targetElevationMeters: 114,
-        targetDistanceKm: fatbikeTrack[8]?.cumDistanceKm ?? 2.6,
+        targetDistanceKm: fatbikeTrack[8]?.cumDistanceKm ?? 3.5,
         offsetMinutes: 35,
         lat: 69.667625,
         lon: 18.948433,
@@ -377,6 +390,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     backAtParkingBeforeEndMinutes: 90,
     returnNote:
       "1h drive each way. Be back from the hike at Tove's Tradisjonsmat 1h 30m before tour end so guests have time for coffee before the drive back.",
+    usesBridgeWarning: true,
     hasActiveTracking: false,
     trackingMode: 'none',
     trailhead: { latitude: 69.526290, longitude: 18.863026, elevationMeters: 15 },
@@ -399,6 +413,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     backAtParkingBeforeEndMinutes: 20,
     returnNote:
       'Set trail at Charlottenlund (no GPS tracking needed). Finish walking ~20 min before tour end for the short drive back to Tromsø Outdoor.',
+    usesBridgeWarning: false,
     hasActiveTracking: false,
     trackingMode: 'none',
     trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
@@ -421,6 +436,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     backAtParkingBeforeEndMinutes: 20,
     returnNote:
       'Charlottenlund ski loop (no GPS tracking needed). Wrap up ~20 min before tour end to pack skis and drive back to Tromsø Outdoor.',
+    usesBridgeWarning: false,
     hasActiveTracking: false,
     trackingMode: 'none',
     trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
@@ -428,6 +444,28 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     summit: null,
     ascentBearingDeg: 350,
     totalDistanceKm: 4.0,
+    gates: [],
+    track: [],
+  },
+  {
+    id: 'sandnessundbrua',
+    name: 'Sandnessundbrua · Kvaløya Bridge',
+    shortLabel: 'Kvaløya Bridge',
+    area: 'Fv862 Bridge Deck (41m)',
+    category: 'bridge',
+    checklistId: 'standard',
+    defaultDurationMinutes: 180,
+    driveMinutesEachWay: 15,
+    returnNote:
+      'Watch gusts ≥20 m/s on Sandnessundbrua for Caravelle and Minibus crossings to Kvaløya.',
+    usesBridgeWarning: true,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: SANDNESSUNDBRUA_POINT,
+    weatherPoint: SANDNESSUNDBRUA_POINT,
+    summit: null,
+    ascentBearingDeg: 295,
+    totalDistanceKm: 1.2,
     gates: [],
     track: [],
   },
@@ -442,6 +480,7 @@ export function matchRouteForText(
   combinedText: string,
   defaultMountainId: string
 ): ActivityRoute {
+  if (category === 'bridge') return getRouteById('sandnessundbrua');
   if (category === 'coffee_snowshoe') return getRouteById('coffee-malangen');
   if (category === 'fatbike') return getRouteById('fatbike-tromsoya');
   if (category === 'ski') return getRouteById('ski-charlottenlund');

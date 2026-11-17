@@ -1,12 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CONFIG } from '../config';
 import type { TourCategory } from '../data/routes';
+import { osloDateKey } from '../utils/format';
 
 const STORAGE_KEY_RAW_MATRIX = 'cache:schedule_matrix_v8';
 const STORAGE_KEY_NOTES_MATRIX = 'cache:schedule_notes_v8';
 const STORAGE_KEY_COMMENTS_LIST = 'cache:schedule_comments_v8';
+const STORAGE_KEY_MANAGER_NOTES = 'cache:schedule_manager_notes_v8';
 const STORAGE_KEY_SYNC_TIME = 'cache:schedule_synced_at';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
+
+// Staff columns in Winter2627: BQ (index 68) through CY (index 102); CR (Michal) = index 95
+const STAFF_COL_START = 68;
+const STAFF_COL_END = 102;
+const MICHAL_CR_COL_INDEX = 95;
 
 export type ContractType = 'full-time' | 'part-time';
 
@@ -69,10 +76,17 @@ export interface DutyStatus {
   detail: string;
 }
 
+export interface UpcomingDayOff {
+  dateLabel: string;
+  isoKey: string;
+  reason: string;
+}
+
 export interface SyncPayload {
   values: string[][];
   notes: string[][];
   comments: SheetCommentItem[];
+  managerNotes: string[][];
   syncedAt: string;
   fromCache: boolean;
 }
@@ -93,15 +107,19 @@ export async function downloadSchedule(): Promise<SyncPayload> {
   }
 
   const syncedAt = new Date().toISOString();
+  const managerNotes = Array.isArray(json.managerNotes) ? (json.managerNotes as string[][]) : [];
+
   await AsyncStorage.setItem(STORAGE_KEY_RAW_MATRIX, JSON.stringify(json.values));
   await AsyncStorage.setItem(STORAGE_KEY_NOTES_MATRIX, JSON.stringify(json.notes || []));
   await AsyncStorage.setItem(STORAGE_KEY_COMMENTS_LIST, JSON.stringify(json.comments || []));
+  await AsyncStorage.setItem(STORAGE_KEY_MANAGER_NOTES, JSON.stringify(managerNotes));
   await AsyncStorage.setItem(STORAGE_KEY_SYNC_TIME, syncedAt);
 
   return {
     values: json.values,
     notes: json.notes || [],
     comments: json.comments || [],
+    managerNotes,
     syncedAt,
     fromCache: false,
   };
@@ -112,6 +130,7 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
     const rawVal = await AsyncStorage.getItem(STORAGE_KEY_RAW_MATRIX);
     const rawNotes = await AsyncStorage.getItem(STORAGE_KEY_NOTES_MATRIX);
     const rawComments = await AsyncStorage.getItem(STORAGE_KEY_COMMENTS_LIST);
+    const rawManagerNotes = await AsyncStorage.getItem(STORAGE_KEY_MANAGER_NOTES);
     const syncedAt = await AsyncStorage.getItem(STORAGE_KEY_SYNC_TIME);
     if (!rawVal) return null;
 
@@ -119,6 +138,7 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
       values: JSON.parse(rawVal) as string[][],
       notes: rawNotes ? (JSON.parse(rawNotes) as string[][]) : [],
       comments: rawComments ? (JSON.parse(rawComments) as SheetCommentItem[]) : [],
+      managerNotes: rawManagerNotes ? (JSON.parse(rawManagerNotes) as string[][]) : [],
       syncedAt: syncedAt || new Date().toISOString(),
       fromCache: true,
     };
@@ -300,6 +320,57 @@ function inferTourCategory(headerTitle: string, cellText: string): {
   return { activity: 'snowshoe', tourCategory: 'easy_snowshoe' };
 }
 
+function findStaffColumnIndex(headerRow: string[], profile: GuideProfile): number {
+  const targetName = profile.fullName.trim().toLowerCase();
+  const maxCol = Math.min(STAFF_COL_END, headerRow.length - 1);
+
+  for (let c = STAFF_COL_START; c <= maxCol; c++) {
+    const h = normalizeHeader(headerRow[c]).toLowerCase();
+    if (targetName && h.includes(targetName)) {
+      return c;
+    }
+  }
+
+  // Fallback for Michal's CR column (index 95) if header changed slightly
+  if (
+    (targetName === 'michal' || profile.initials.trim().toLowerCase() === 'mh') &&
+    headerRow.length > MICHAL_CR_COL_INDEX
+  ) {
+    return MICHAL_CR_COL_INDEX;
+  }
+
+  return -1;
+}
+
+function isOnDutyMarker(cellLower: string): boolean {
+  return (
+    cellLower.includes('work') ||
+    cellLower.includes('rc') ||
+    cellLower.includes('sato') ||
+    cellLower.includes('first aid') ||
+    cellLower.includes('training') ||
+    cellLower.includes('inventory') ||
+    cellLower.includes('email') ||
+    cellLower.includes('guiding') ||
+    cellLower.includes('course')
+  );
+}
+
+function isDayOffMarker(cellLower: string, guideInitialsLower: string): boolean {
+  if (!cellLower) return false;
+  if (guideInitialsLower && cellLower.split(/[^a-z0-9]+/).includes(guideInitialsLower)) {
+    return true;
+  }
+  return (
+    cellLower.includes('off') ||
+    cellLower.includes('holiday') ||
+    cellLower.includes('avspasering') ||
+    cellLower.includes('unpaid') ||
+    cellLower.includes('leave') ||
+    cellLower.includes('request')
+  );
+}
+
 export function calculateDutyStatus(
   matrix: string[][],
   targetRowIdx: number,
@@ -323,25 +394,7 @@ export function calculateDutyStatus(
   }
 
   const headerRow = matrix[1] || [];
-  let staffStartCol = 69;
-  for (let c = 50; c < headerRow.length; c++) {
-    const h = normalizeHeader(headerRow[c]).toLowerCase();
-    if (h.includes('caravelle #4')) {
-      staffStartCol = c + 1;
-      break;
-    }
-  }
-
-  let nameColIdx = -1;
-  const targetName = profile.fullName.trim().toLowerCase();
-
-  for (let c = staffStartCol; c < headerRow.length; c++) {
-    const h = normalizeHeader(headerRow[c]).toLowerCase();
-    if (targetName && h.includes(targetName)) {
-      nameColIdx = c;
-      break;
-    }
-  }
+  const nameColIdx = findStaffColumnIndex(headerRow, profile);
 
   if (nameColIdx === -1) {
     return profile.contractType === 'full-time'
@@ -349,11 +402,12 @@ export function calculateDutyStatus(
       : { type: 'day_off', title: 'Day Off', detail: 'No tours or shift assigned today.' };
   }
 
-  const cellText = (matrix[targetRowIdx]?.[nameColIdx] || '').toString().trim().toLowerCase();
-  const isEmpty = cellText.length === 0;
+  const rawCell = (matrix[targetRowIdx]?.[nameColIdx] || '').toString().trim();
+  const cellLower = rawCell.toLowerCase();
+  const initialsLower = profile.initials.trim().toLowerCase();
 
-  if (profile.contractType === 'full-time') {
-    if (isEmpty) {
+  if (cellLower.length === 0) {
+    if (profile.contractType === 'full-time') {
       return {
         type: 'base',
         title: 'Base / Workshop Duty',
@@ -362,33 +416,44 @@ export function calculateDutyStatus(
     }
     return {
       type: 'day_off',
-      title: 'Day Off / Leave',
-      detail: `Marked in shift roster: "${cellText}". Enjoy your day off!`,
-    };
-  }
-
-  if (isEmpty) {
-    return {
-      type: 'day_off',
       title: 'Day Off',
       detail: 'No shift scheduled today.',
     };
   }
+
+  if (isDayOffMarker(cellLower, initialsLower)) {
+    return {
+      type: 'day_off',
+      title: 'Day Off / Leave',
+      detail: `Marked "${rawCell}" in your schedule column.`,
+    };
+  }
+
+  if (isOnDutyMarker(cellLower)) {
+    return {
+      type: 'base',
+      title: 'On Duty (Base / Training)',
+      detail: `Schedule note: "${rawCell}".`,
+    };
+  }
+
+  if (profile.contractType === 'full-time') {
+    return {
+      type: 'day_off',
+      title: 'Day Off / Leave',
+      detail: `Marked "${rawCell}" in your schedule column.`,
+    };
+  }
+
   return {
     type: 'base',
     title: 'Scheduled on Duty',
-    detail: `Roster note: "${cellText}".`,
+    detail: `Roster note: "${rawCell}".`,
   };
 }
 
-export function parseGuideAssignments(
-  matrix: string[][],
-  notes: string[][],
-  comments: SheetCommentItem[],
-  guideCode: string,
-  targetDate: Date = new Date()
-): { assignments: GuideAssignment[]; targetRowIdx: number } {
-  if (!matrix || matrix.length < 3) return { assignments: [], targetRowIdx: -1 };
+export function findRowIndexForDate(matrix: string[][], targetDate: Date): number {
+  if (!matrix || matrix.length < 3) return -1;
 
   const dayNumber = targetDate.getDate();
   const monthNames = [
@@ -398,8 +463,6 @@ export function parseGuideAssignments(
   const targetMonth = monthNames[targetDate.getMonth()] ?? '';
 
   let currentMonth = '';
-  let targetRowIdx = -1;
-
   for (let r = 0; r < matrix.length; r++) {
     const row = matrix[r];
     if (!row) continue;
@@ -412,21 +475,68 @@ export function parseGuideAssignments(
 
     const col1Day = parseInt((row[1] || '').toString().trim(), 10);
     if (currentMonth === targetMonth && col1Day === dayNumber) {
-      targetRowIdx = r;
-      break;
+      return r;
     }
   }
 
-  if (targetRowIdx === -1) {
-    for (let r = 0; r < matrix.length; r++) {
-      const col1Day = parseInt((matrix[r]?.[1] || '').toString().trim(), 10);
-      if (col1Day === dayNumber) {
-        targetRowIdx = r;
-        break;
-      }
+  for (let r = 0; r < matrix.length; r++) {
+    const col1Day = parseInt((matrix[r]?.[1] || '').toString().trim(), 10);
+    if (col1Day === dayNumber) {
+      return r;
     }
   }
 
+  return -1;
+}
+
+export function findUpcomingDaysOff(
+  matrix: string[][],
+  notes: string[][],
+  comments: SheetCommentItem[],
+  profile: GuideProfile,
+  fromDate: Date = new Date(),
+  daysAhead: number = 14
+): UpcomingDayOff[] {
+  if (!matrix || matrix.length < 3) return [];
+
+  const upcoming: UpcomingDayOff[] = [];
+  for (let offset = 1; offset <= daysAhead; offset++) {
+    const d = new Date(fromDate);
+    d.setDate(d.getDate() + offset);
+    const { assignments, targetRowIdx } = parseGuideAssignments(
+      matrix,
+      notes,
+      comments,
+      profile.initials,
+      d
+    );
+    if (targetRowIdx === -1) continue;
+    const status = calculateDutyStatus(matrix, targetRowIdx, profile, assignments.length);
+    if (status.type === 'day_off') {
+      upcoming.push({
+        dateLabel: d.toLocaleDateString('en-GB', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+        }),
+        isoKey: osloDateKey(d),
+        reason: status.detail,
+      });
+    }
+    if (upcoming.length >= 4) break;
+  }
+
+  return upcoming;
+}
+
+export function parseGuideAssignments(
+  matrix: string[][],
+  notes: string[][],
+  comments: SheetCommentItem[],
+  guideCode: string,
+  targetDate: Date = new Date()
+): { assignments: GuideAssignment[]; targetRowIdx: number } {
+  const targetRowIdx = findRowIndexForDate(matrix, targetDate);
   if (targetRowIdx === -1) return { assignments: [], targetRowIdx: -1 };
 
   const headerRow = matrix[1] || [];

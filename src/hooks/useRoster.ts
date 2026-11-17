@@ -1,35 +1,40 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { loadJson, saveJson } from '../services/persistence';
 
 export interface Guest {
   id: string;
   name: string;
+  partySize: number;
   bootSize: string;
   height: string;
   weight: string;
   medicalNotes: string;
 }
 
+export type NewGuestInput = Omit<Guest, 'id' | 'partySize'> & { partySize?: number };
+
 function createId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function isGuest(value: unknown): value is Guest {
+function isGuest(value: unknown): value is Partial<Guest> & { id: string; name: string } {
   if (!value || typeof value !== 'object') return false;
   const guest = value as Partial<Guest>;
-  return (
-    typeof guest.id === 'string' &&
-    typeof guest.name === 'string' &&
-    typeof guest.bootSize === 'string'
-  );
+  return typeof guest.id === 'string' && typeof guest.name === 'string';
+}
+
+function normalizePartySize(size: number | undefined): number {
+  if (typeof size !== 'number' || !Number.isFinite(size)) return 1;
+  return Math.max(1, Math.round(size));
 }
 
 export function useRoster(tourKey: string = 'default'): {
   guests: Guest[];
+  totalGuestsCount: number;
   ready: boolean;
-  addGuest: (guest: Omit<Guest, 'id'>) => void;
-  importGuests: (newGuests: Omit<Guest, 'id'>[]) => number;
+  addGuest: (guest: NewGuestInput) => void;
+  importGuests: (newGuests: NewGuestInput[]) => number;
   updateGuest: (id: string, patch: Partial<Omit<Guest, 'id'>>) => void;
   removeGuest: (id: string) => void;
   clearRoster: () => void;
@@ -46,7 +51,10 @@ export function useRoster(tourKey: string = 'default'): {
       if (!active) return;
       if (Array.isArray(stored)) {
         const validated = stored.filter(isGuest).map((g) => ({
-          ...g,
+          id: g.id,
+          name: g.name,
+          partySize: normalizePartySize(g.partySize),
+          bootSize: g.bootSize || '',
           height: g.height || '',
           weight: g.weight || '',
           medicalNotes: g.medicalNotes || '',
@@ -67,13 +75,19 @@ export function useRoster(tourKey: string = 'default'): {
     void saveJson(storageKey, guests);
   }, [guests, ready, storageKey]);
 
-  const addGuest = useCallback((guest: Omit<Guest, 'id'>) => {
+  const totalGuestsCount = useMemo(
+    () => guests.reduce((sum, g) => sum + normalizePartySize(g.partySize), 0),
+    [guests]
+  );
+
+  const addGuest = useCallback((guest: NewGuestInput) => {
     const name = guest.name.trim();
     if (!name) return;
     setGuests((current) => [
       {
         id: createId(),
         name,
+        partySize: normalizePartySize(guest.partySize),
         bootSize: guest.bootSize.trim(),
         height: guest.height.trim(),
         weight: guest.weight.trim(),
@@ -83,7 +97,7 @@ export function useRoster(tourKey: string = 'default'): {
     ]);
   }, []);
 
-  const importGuests = useCallback((incoming: Omit<Guest, 'id'>[]): number => {
+  const importGuests = useCallback((incoming: NewGuestInput[]): number => {
     let addedCount = 0;
     setGuests((current) => {
       const existingNames = new Set(current.map((g) => g.name.toLowerCase().trim()));
@@ -96,6 +110,7 @@ export function useRoster(tourKey: string = 'default'): {
           toAdd.push({
             id: createId(),
             name: cleanName,
+            partySize: normalizePartySize(item.partySize),
             bootSize: item.bootSize.trim(),
             height: item.height.trim(),
             weight: item.weight.trim(),
@@ -111,7 +126,17 @@ export function useRoster(tourKey: string = 'default'): {
 
   const updateGuest = useCallback((id: string, patch: Partial<Omit<Guest, 'id'>>) => {
     setGuests((current) =>
-      current.map((guest) => (guest.id === id ? { ...guest, ...patch } : guest))
+      current.map((guest) => {
+        if (guest.id !== id) return guest;
+        return {
+          ...guest,
+          ...patch,
+          partySize:
+            patch.partySize !== undefined
+              ? normalizePartySize(patch.partySize)
+              : guest.partySize,
+        };
+      })
     );
   }, []);
 
@@ -123,5 +148,14 @@ export function useRoster(tourKey: string = 'default'): {
     setGuests([]);
   }, []);
 
-  return { guests, ready, addGuest, importGuests, updateGuest, removeGuest, clearRoster };
+  return {
+    guests,
+    totalGuestsCount,
+    ready,
+    addGuest,
+    importGuests,
+    updateGuest,
+    removeGuest,
+    clearRoster,
+  };
 }

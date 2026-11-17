@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -11,128 +10,76 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
-  Phone,
+  Minus,
   Plus,
   RotateCcw,
   Trash2,
   Users,
+  X,
 } from 'lucide-react-native';
 
+import { useActiveTour } from '../context/ActiveTourContext';
 import { useRoster } from '../hooks/useRoster';
-import {
-  getCachedSchedule,
-  getGuideProfile,
-  parseGuideAssignments,
-  type GuideAssignment,
-} from '../services/googleSheetsService';
-import { parseGuestsFromComment } from '../utils/commentParser';
 import { colors, sharedStyles, touchTarget } from '../theme';
-
-const HJELP_113_URL = 'android-app://no.norskluftambulanse.hjelp113';
-const EMERGENCY_TEL = 'tel:113';
-
-async function openHjelp113(): Promise<void> {
-  try {
-    const canOpenApp = await Linking.canOpenURL(HJELP_113_URL);
-    if (canOpenApp) {
-      await Linking.openURL(HJELP_113_URL);
-      return;
-    }
-  } catch {}
-
-  try {
-    await Linking.openURL(EMERGENCY_TEL);
-  } catch {
-    Alert.alert('Emergency call failed', 'Dial 113 manually.');
-  }
-}
+import { parseGuestsFromComment } from '../utils/commentParser';
 
 export function RosterScreen() {
-  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
-  const [selectedTourIndex, setSelectedTourIndex] = useState<number>(0);
-  const [dayAssignments, setDayAssignments] = useState<GuideAssignment[]>([]);
+  const {
+    assignments,
+    selectedAssignmentIdx,
+    activeAssignment,
+    selectedDate,
+    tourKey,
+    selectAssignment,
+    shiftDate,
+    resetToToday,
+  } = useActiveTour();
+
+  const roster = useRoster(tourKey);
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [expandedGuestId, setExpandedGuestId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
+  const [partySize, setPartySize] = useState(1);
   const [bootSize, setBootSize] = useState('');
   const [height, setHeight] = useState('');
   const [weight, setWeight] = useState('');
   const [medicalNotes, setMedicalNotes] = useState('');
 
-  // Re-read cached schedule every time user taps the Roster tab or changes the date
-  const loadDayAssignments = useCallback(async () => {
-    const profile = await getGuideProfile();
-    const cached = await getCachedSchedule();
-    if (cached) {
-      const { assignments } = parseGuideAssignments(
-        cached.values,
-        cached.notes,
-        cached.comments,
-        profile.initials,
-        selectedDate
-      );
-      setDayAssignments(assignments);
-      setSelectedTourIndex(0);
-    }
-  }, [selectedDate]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadDayAssignments();
-    }, [loadDayAssignments])
-  );
-
-  const activeTour: GuideAssignment | null = dayAssignments[selectedTourIndex] ?? null;
-
-  // Distinct storage key per tour (date + tour name + index)
-  const tourKey = activeTour
-    ? `${selectedDate.toISOString().slice(0, 10)}_${activeTour.tourName.replace(/\s+/g, '_')}_${selectedTourIndex}`
-    : `free_${selectedDate.toISOString().slice(0, 10)}`;
-
-  const roster = useRoster(tourKey);
-
-  // Parse candidate guest names from the active tour's comments
   const parsedCandidates = useMemo(() => {
-    if (!activeTour) return [];
+    if (!activeAssignment) return [];
 
-    const commentTexts = (activeTour.commentsList || []).map((c) => {
+    const commentTexts = (activeAssignment.commentsList || []).map((c) => {
       const replyTexts = (c.replies || []).map((r) => r.content).join('\n');
       return `${c.content}\n${replyTexts}`;
     });
 
-    if (activeTour.cellNote) {
-      commentTexts.push(activeTour.cellNote);
+    if (activeAssignment.cellNote) {
+      commentTexts.push(activeAssignment.cellNote);
     }
 
     return parseGuestsFromComment(commentTexts.join('\n'));
-  }, [activeTour]);
-
-  const handleShiftDate = (days: number) => {
-    setSelectedDate((prev) => {
-      const next = new Date(prev);
-      next.setDate(next.getDate() + days);
-      return next;
-    });
-  };
-
-  const handleResetToToday = () => {
-    setSelectedDate(new Date());
-  };
+  }, [activeAssignment]);
 
   const handleImportCandidates = () => {
     if (parsedCandidates.length === 0) return;
-    const added = roster.importGuests(parsedCandidates);
+    const added = roster.importGuests(
+      parsedCandidates.map((c) => ({ ...c, partySize: 1 }))
+    );
     Alert.alert('Roster Updated', `Imported ${added} guest(s) for this tour.`);
   };
 
   const handleClearAll = () => {
     Alert.alert(
       'Clear Tour Roster?',
-      'This will remove all guests from the scratchpad for this specific tour.',
+      'Remove all guests from this tour scratchpad?',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear', style: 'destructive', onPress: roster.clearRoster },
@@ -142,12 +89,21 @@ export function RosterScreen() {
 
   const addGuest = () => {
     if (!name.trim()) return;
-    roster.addGuest({ name, bootSize, height, weight, medicalNotes });
+    roster.addGuest({
+      name,
+      partySize,
+      bootSize,
+      height,
+      weight,
+      medicalNotes,
+    });
     setName('');
+    setPartySize(1);
     setBootSize('');
     setHeight('');
     setWeight('');
     setMedicalNotes('');
+    setShowAddForm(false);
   };
 
   const dateLabel = selectedDate.toLocaleDateString('en-GB', {
@@ -155,7 +111,6 @@ export function RosterScreen() {
     day: 'numeric',
     month: 'short',
   });
-
   const isToday = new Date().toDateString() === selectedDate.toDateString();
 
   return (
@@ -165,219 +120,303 @@ export function RosterScreen() {
     >
       <ScrollView
         style={sharedStyles.screen}
-        contentContainerStyle={sharedStyles.content}
+        contentContainerStyle={styles.compactContent}
         keyboardShouldPersistTaps="handled"
       >
-        {/* 1. Emergency 113 Button */}
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => void openHjelp113()}
-          style={({ pressed }) => [touchTarget, styles.emergency, pressed && styles.pressed]}
-        >
-          <Phone color={colors.text} size={26} />
-          <View style={styles.emergencyCopy}>
-            <Text style={styles.emergencyTitle}>Hjelp 113</Text>
-            <Text style={styles.emergencyDetail}>Opens the app, or dials 113</Text>
-          </View>
-        </Pressable>
-
-        {/* 2. Date Navigation Bar */}
         <View style={styles.dateBar}>
           <Pressable
-            onPress={() => handleShiftDate(-1)}
-            style={({ pressed }) => [touchTarget, styles.dateNavBtn, pressed && styles.pressed]}
+            onPress={() => shiftDate(-1)}
+            style={({ pressed }) => [styles.dateArrow, pressed && styles.pressed]}
           >
-            <ChevronLeft color={colors.text} size={24} />
+            <ChevronLeft color={colors.text} size={20} />
           </Pressable>
 
-          <Pressable onPress={handleResetToToday} style={styles.dateCenter}>
-            <Text style={styles.dateLabelText}>{dateLabel}</Text>
-            <Text style={[styles.todayBadge, isToday && styles.todayBadgeActive]}>
-              {isToday ? 'TODAY' : 'TAP FOR TODAY'}
+          <Pressable onPress={resetToToday} style={styles.dateCenter}>
+            <Text style={styles.dateLabelText}>
+              {dateLabel}
+              {!isToday ? ' · Tap for Today' : ''}
             </Text>
+            {activeAssignment ? (
+              <Text style={styles.activeTourSub} numberOfLines={1}>
+                {activeAssignment.tourName} ({activeAssignment.guestCount} pax)
+              </Text>
+            ) : (
+              <Text style={styles.activeTourSub}>No tour assigned</Text>
+            )}
           </Pressable>
 
           <Pressable
-            onPress={() => handleShiftDate(1)}
-            style={({ pressed }) => [touchTarget, styles.dateNavBtn, pressed && styles.pressed]}
+            onPress={() => shiftDate(1)}
+            style={({ pressed }) => [styles.dateArrow, pressed && styles.pressed]}
           >
-            <ChevronRight color={colors.text} size={24} />
+            <ChevronRight color={colors.text} size={20} />
           </Pressable>
         </View>
 
-        {/* 3. Multi-Tour Selector Tabs (Shows when 2 or more tours assigned!) */}
-        {dayAssignments.length > 1 ? (
-          <View style={styles.tourTabsSection}>
-            <Text style={styles.subLabel}>SELECT TOUR ({dayAssignments.length} ASSIGNED)</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tourTabsScroll}>
-              {dayAssignments.map((tour, idx) => {
-                const isSelected = idx === selectedTourIndex;
-                return (
-                  <Pressable
-                    key={idx}
-                    onPress={() => setSelectedTourIndex(idx)}
-                    style={[styles.tourTabPill, isSelected && styles.tourTabPillActive]}
-                  >
-                    <Text style={[styles.tourTabPillText, isSelected && styles.tourTabPillTextActive]}>
-                      {idx + 1}. {tour.tourName.slice(0, 26)} ({tour.guestCount} pax)
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
+        {assignments.length > 1 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.tourTabsScroll}
+          >
+            {assignments.map((tour, idx) => {
+              const isSelected = idx === selectedAssignmentIdx;
+              return (
+                <Pressable
+                  key={`${tour.tourName}-${idx}`}
+                  onPress={() => selectAssignment(idx)}
+                  style={[styles.tourPill, isSelected && styles.tourPillActive]}
+                >
+                  <Text style={[styles.tourPillText, isSelected && styles.tourPillTextActive]}>
+                    {tour.startTimeLabel ?? `${idx + 1}.`} {tour.tourName.slice(0, 18)} (
+                    {tour.guestCount})
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         ) : null}
 
-        {/* 4. Active Tour Header Card */}
-        {activeTour ? (
-          <View style={styles.activeTourCard}>
-            <View style={styles.activeTourHeader}>
-              <Text style={styles.activeTourCategory}>
-                {activeTour.isCharter ? '🚢 CHARTER' : '🏔️ REGULAR TOUR'} • {activeTour.activity.toUpperCase()}
-              </Text>
-              {activeTour.vehicle ? (
-                <View style={styles.vehicleBadge}>
-                  <Text style={styles.vehicleText}>{activeTour.vehicle}</Text>
-                </View>
-              ) : null}
-            </View>
-            <Text style={styles.activeTourTitle}>{activeTour.tourName}</Text>
-            <Text style={styles.activeTourPax}>
-              Expected Guests: {activeTour.guestCount > 0 ? `${activeTour.guestCount} pax` : 'Open'}
-            </Text>
-          </View>
-        ) : (
-          <View style={[sharedStyles.card, styles.emptyTourCard]}>
-            <Text style={styles.emptyTourTitle}>No Tour Assigned on {dateLabel}</Text>
-            <Text style={sharedStyles.secondary}>Use the arrows above to select a tour date.</Text>
-          </View>
-        )}
-
-        {/* 5. Comment Import Banner */}
-        {parsedCandidates.length > 0 ? (
-          <View style={styles.importBanner}>
-            <View style={styles.importHeader}>
-              <Users color={colors.accent} size={20} />
-              <Text style={styles.importTitle}>Found {parsedCandidates.length} Guest(s) in Notes</Text>
-            </View>
-            <Text style={styles.importPreview} numberOfLines={2}>
-              {parsedCandidates
-                .map((c) => {
-                  const specs = [c.bootSize && `EU${c.bootSize}`, c.height, c.weight].filter(Boolean).join(', ');
-                  return `${c.name}${specs ? ` (${specs})` : ''}`;
-                })
-                .join(' • ')}
-            </Text>
+        <View style={styles.actionRow}>
+          {parsedCandidates.length > 0 ? (
             <Pressable
               onPress={handleImportCandidates}
               style={({ pressed }) => [touchTarget, styles.importBtn, pressed && styles.pressed]}
             >
-              <Download color={colors.background} size={20} />
-              <Text style={styles.importBtnText}>Import {parsedCandidates.length} Guests to This Tour</Text>
+              <Download color={colors.background} size={18} />
+              <Text style={styles.importBtnText}>Import {parsedCandidates.length}</Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={() => setShowAddForm((v) => !v)}
+            style={({ pressed }) => [
+              touchTarget,
+              styles.addToggleBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            {showAddForm ? (
+              <>
+                <X color={colors.text} size={18} />
+                <Text style={styles.addToggleText}>Close Form</Text>
+              </>
+            ) : (
+              <>
+                <Plus color={colors.background} size={18} />
+                <Text style={styles.addToggleTextDark}>Add Guest</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+
+        {showAddForm ? (
+          <View style={[sharedStyles.card, styles.addFormCard]}>
+            <View style={styles.nameAndPaxRow}>
+              <View style={styles.nameCol}>
+                <Field
+                  label="Lead Name"
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="e.g. John Smith"
+                />
+              </View>
+              <View style={styles.paxCol}>
+                <Text style={styles.fieldLabel}>Persons</Text>
+                <View style={styles.stepperBox}>
+                  <Pressable
+                    onPress={() => setPartySize((n) => Math.max(1, n - 1))}
+                    style={styles.stepperBtn}
+                  >
+                    <Minus color={colors.text} size={16} />
+                  </Pressable>
+                  <Text style={styles.stepperVal}>{partySize}</Text>
+                  <Pressable
+                    onPress={() => setPartySize((n) => Math.min(30, n + 1))}
+                    style={styles.stepperBtn}
+                  >
+                    <Plus color={colors.text} size={16} />
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.specRow}>
+              <View style={styles.specCol}>
+                <Field label="Shoe" value={bootSize} onChangeText={setBootSize} placeholder="42" />
+              </View>
+              <View style={styles.specCol}>
+                <Field label="Height" value={height} onChangeText={setHeight} placeholder="180 cm" />
+              </View>
+              <View style={styles.specCol}>
+                <Field label="Weight" value={weight} onChangeText={setWeight} placeholder="75 kg" />
+              </View>
+            </View>
+            <Field
+              label="Medical / Dietary Notes"
+              value={medicalNotes}
+              onChangeText={setMedicalNotes}
+              placeholder="e.g. Asthma, vegan"
+            />
+            <Pressable
+              onPress={addGuest}
+              style={({ pressed }) => [touchTarget, styles.saveGuestBtn, pressed && styles.pressed]}
+            >
+              <Text style={styles.saveGuestText}>
+                Save ({partySize} {partySize === 1 ? 'person' : 'persons'})
+              </Text>
             </Pressable>
           </View>
         ) : null}
 
-        {/* 6. Manual Add Walk-In Guest */}
-        <Text style={sharedStyles.sectionTitle}>Add Walk-In Guest</Text>
-        <Field label="Guest Name" value={name} onChangeText={setName} placeholder="e.g. John Doe" />
-
-        <View style={styles.specRow}>
-          <View style={styles.specCol}>
-            <Field label="Shoe" value={bootSize} onChangeText={setBootSize} placeholder="34" />
+        <View style={styles.rosterHeader}>
+          <View style={styles.rosterCountRow}>
+            <Users color={colors.accent} size={18} />
+            <Text style={styles.rosterTitle}>
+              Guests ({roster.totalGuestsCount}
+              {activeAssignment?.guestCount ? ` / ${activeAssignment.guestCount}` : ''})
+            </Text>
           </View>
-          <View style={styles.specCol}>
-            <Field label="Height" value={height} onChangeText={setHeight} placeholder="180 cm" />
-          </View>
-          <View style={styles.specCol}>
-            <Field label="Weight" value={weight} onChangeText={setWeight} placeholder="75 kg" />
-          </View>
-        </View>
-
-        <Field
-          label="Medical / Dietary Notes"
-          value={medicalNotes}
-          onChangeText={setMedicalNotes}
-          placeholder="e.g. Asthma, vegan, knee issue"
-          multiline
-        />
-
-        <Pressable
-          accessibilityRole="button"
-          onPress={addGuest}
-          style={({ pressed }) => [touchTarget, styles.addButton, pressed && styles.pressed]}
-        >
-          <Plus color={colors.background} size={22} />
-          <Text style={styles.addLabel}>Add to This Tour</Text>
-        </Pressable>
-
-        {/* 7. Tour Roster List */}
-        <View style={styles.rosterHeaderRow}>
-          <Text style={sharedStyles.sectionTitle}>
-            Roster ({roster.guests.length}{activeTour?.guestCount ? ` / ${activeTour.guestCount}` : ''})
-          </Text>
           {roster.guests.length > 0 ? (
-            <Pressable onPress={handleClearAll} style={styles.clearBtn}>
-              <RotateCcw color={colors.textSecondary} size={16} />
-              <Text style={styles.clearBtnText}>Reset</Text>
+            <Pressable onPress={handleClearAll} style={styles.resetBtn}>
+              <RotateCcw color={colors.textSecondary} size={14} />
+              <Text style={styles.resetText}>Reset</Text>
             </Pressable>
           ) : null}
         </View>
 
         {roster.guests.length === 0 ? (
           <Text style={sharedStyles.secondary}>
-            No guests registered for this tour yet. Tap Import above or add walk-ins manually.
+            No guests yet. Tap Import or + Add Guest above.
           </Text>
         ) : (
-          roster.guests.map((guest) => (
-            <View key={guest.id} style={[sharedStyles.card, styles.guestCard]}>
-              <View style={styles.guestHeader}>
-                <Text style={styles.guestName}>{guest.name}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => roster.removeGuest(guest.id)}
-                  style={({ pressed }) => [touchTarget, styles.delete, pressed && styles.pressed]}
-                >
-                  <Trash2 color={colors.danger} size={20} />
-                </Pressable>
-              </View>
+          <View style={styles.guestList}>
+            {roster.guests.map((guest, index) => {
+              const isExpanded = expandedGuestId === guest.id;
+              const specs = [guest.bootSize && `EU${guest.bootSize}`, guest.height, guest.weight]
+                .filter(Boolean)
+                .join(' · ');
+              const pax = guest.partySize || 1;
 
-              <View style={styles.specRow}>
-                <View style={styles.specCol}>
-                  <Field
-                    label="Shoe"
-                    value={guest.bootSize}
-                    onChangeText={(boot) => roster.updateGuest(guest.id, { bootSize: boot })}
-                    placeholder="Size"
-                  />
-                </View>
-                <View style={styles.specCol}>
-                  <Field
-                    label="Height"
-                    value={guest.height}
-                    onChangeText={(h) => roster.updateGuest(guest.id, { height: h })}
-                    placeholder="Height"
-                  />
-                </View>
-                <View style={styles.specCol}>
-                  <Field
-                    label="Weight"
-                    value={guest.weight}
-                    onChangeText={(w) => roster.updateGuest(guest.id, { weight: w })}
-                    placeholder="Weight"
-                  />
-                </View>
-              </View>
+              return (
+                <View key={guest.id} style={styles.guestRowCard}>
+                  <Pressable
+                    onPress={() =>
+                      setExpandedGuestId(isExpanded ? null : guest.id)
+                    }
+                    style={({ pressed }) => [styles.guestCompactRow, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.guestIndex}>{index + 1}.</Text>
+                    <View style={styles.guestMainCol}>
+                      <View style={styles.guestNameRow}>
+                        <Text style={styles.guestName} numberOfLines={1}>
+                          {guest.name}
+                        </Text>
+                        {pax > 1 ? (
+                          <View style={styles.paxBadge}>
+                            <Text style={styles.paxBadgeText}>{pax} pax</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text style={styles.guestSpecs} numberOfLines={1}>
+                        {specs || 'No sizes'}
+                      </Text>
+                    </View>
 
-              <Field
-                label="Medical / Dietary Notes"
-                value={guest.medicalNotes}
-                onChangeText={(notes) => roster.updateGuest(guest.id, { medicalNotes: notes })}
-                placeholder="None"
-                multiline
-              />
-            </View>
-          ))
+                    {guest.medicalNotes ? (
+                      <View style={styles.medPill}>
+                        <Text style={styles.medPillText} numberOfLines={1}>
+                          {guest.medicalNotes}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {isExpanded ? (
+                      <ChevronUp color={colors.accent} size={18} />
+                    ) : (
+                      <ChevronDown color={colors.textSecondary} size={18} />
+                    )}
+                  </Pressable>
+
+                  {isExpanded ? (
+                    <View style={styles.expandedEdit}>
+                      <View style={styles.expandedPaxRow}>
+                        <Text style={styles.fieldLabel}>Party Size (Persons)</Text>
+                        <View style={styles.stepperBox}>
+                          <Pressable
+                            onPress={() =>
+                              roster.updateGuest(guest.id, {
+                                partySize: Math.max(1, pax - 1),
+                              })
+                            }
+                            style={styles.stepperBtn}
+                          >
+                            <Minus color={colors.text} size={16} />
+                          </Pressable>
+                          <Text style={styles.stepperVal}>{pax}</Text>
+                          <Pressable
+                            onPress={() =>
+                              roster.updateGuest(guest.id, {
+                                partySize: Math.min(30, pax + 1),
+                              })
+                            }
+                            style={styles.stepperBtn}
+                          >
+                            <Plus color={colors.text} size={16} />
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      <View style={styles.specRow}>
+                        <View style={styles.specCol}>
+                          <Field
+                            label="Shoe"
+                            value={guest.bootSize}
+                            onChangeText={(boot) => roster.updateGuest(guest.id, { bootSize: boot })}
+                            placeholder="Size"
+                          />
+                        </View>
+                        <View style={styles.specCol}>
+                          <Field
+                            label="Height"
+                            value={guest.height}
+                            onChangeText={(h) => roster.updateGuest(guest.id, { height: h })}
+                            placeholder="Height"
+                          />
+                        </View>
+                        <View style={styles.specCol}>
+                          <Field
+                            label="Weight"
+                            value={guest.weight}
+                            onChangeText={(w) => roster.updateGuest(guest.id, { weight: w })}
+                            placeholder="Weight"
+                          />
+                        </View>
+                      </View>
+                      <View style={styles.expandedBottomRow}>
+                        <View style={styles.medInputWrap}>
+                          <Field
+                            label="Medical / Dietary"
+                            value={guest.medicalNotes}
+                            onChangeText={(notes) =>
+                              roster.updateGuest(guest.id, { medicalNotes: notes })
+                            }
+                            placeholder="None"
+                          />
+                        </View>
+                        <Pressable
+                          onPress={() => roster.removeGuest(guest.id)}
+                          style={({ pressed }) => [styles.deleteBtn, pressed && styles.pressed]}
+                        >
+                          <Trash2 color={colors.danger} size={18} />
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
         )}
       </ScrollView>
     </KeyboardAvoidingView>
@@ -389,13 +428,11 @@ function Field({
   value,
   onChangeText,
   placeholder,
-  multiline = false,
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
-  multiline?: boolean;
 }) {
   return (
     <View style={styles.field}>
@@ -405,8 +442,7 @@ function Field({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={colors.textSecondary}
-        style={[styles.input, multiline && styles.inputMultiline]}
-        multiline={multiline}
+        style={styles.input}
         autoCorrect={false}
       />
     </View>
@@ -414,132 +450,182 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  emergency: {
-    flexDirection: 'row',
-    gap: 12,
-    backgroundColor: colors.danger,
-    borderRadius: 16,
-    paddingHorizontal: 16,
+  compactContent: {
+    padding: 12,
+    paddingBottom: 28,
+    gap: 8,
   },
-  emergencyCopy: { flexShrink: 1 },
-  emergencyTitle: { color: colors.text, fontSize: 24, fontWeight: '800' },
-  emergencyDetail: { color: colors.text, fontSize: 15 },
   dateBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 8,
-    marginTop: 8,
-  },
-  dateNavBtn: { width: 52, height: 52, justifyContent: 'center', alignItems: 'center' },
-  dateCenter: { alignItems: 'center', paddingVertical: 8 },
-  dateLabelText: { color: colors.text, fontSize: 18, fontWeight: '800' },
-  todayBadge: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', marginTop: 2 },
-  todayBadgeActive: { color: colors.accent },
-  tourTabsSection: { gap: 6, marginTop: 8 },
-  subLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  tourTabsScroll: { gap: 8, paddingVertical: 2 },
-  tourTabPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
     borderRadius: 12,
+    paddingHorizontal: 4,
+    minHeight: 48,
+  },
+  dateArrow: { width: 42, height: 44, justifyContent: 'center', alignItems: 'center' },
+  dateCenter: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  dateLabelText: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  activeTourSub: { color: colors.accentSoft, fontSize: 11, fontWeight: '700' },
+  tourTabsScroll: { gap: 6, paddingVertical: 2 },
+  tourPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
   },
-  tourTabPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  tourTabPillText: { color: colors.textSecondary, fontSize: 14, fontWeight: '700' },
-  tourTabPillTextActive: { color: colors.background, fontWeight: '800' },
-  activeTourCard: {
-    backgroundColor: '#0F172A',
-    borderColor: colors.accent,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    padding: 14,
-    gap: 4,
-    marginTop: 8,
-  },
-  activeTourHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  activeTourCategory: { color: colors.accent, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  vehicleBadge: { backgroundColor: '#1E293B', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  vehicleText: { color: '#38BDF8', fontSize: 12, fontWeight: '800' },
-  activeTourTitle: { color: colors.text, fontSize: 19, fontWeight: '800' },
-  activeTourPax: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  emptyTourCard: { alignItems: 'center', paddingVertical: 20, gap: 4, marginTop: 8 },
-  emptyTourTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
-  importBanner: {
-    backgroundColor: '#0C4A6E',
-    borderColor: '#38BDF8',
-    borderWidth: 1.5,
-    borderRadius: 16,
-    padding: 14,
-    gap: 8,
-    marginTop: 8,
-  },
-  importHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  importTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  importPreview: { color: colors.textSecondary, fontSize: 13, fontStyle: 'italic' },
+  tourPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  tourPillText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  tourPillTextActive: { color: colors.background, fontWeight: '800' },
+  actionRow: { flexDirection: 'row', gap: 8 },
   importBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: colors.ice,
+    borderRadius: 12,
+    minHeight: 44,
+  },
+  importBtnText: { color: colors.background, fontSize: 14, fontWeight: '800' },
+  addToggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
     backgroundColor: colors.accent,
     borderRadius: 12,
-    flexDirection: 'row',
-    gap: 8,
-    minHeight: 48,
+    minHeight: 44,
   },
-  importBtnText: { color: colors.background, fontSize: 15, fontWeight: '800' },
-  field: { gap: 4 },
-  fieldLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
-  input: {
-    minHeight: 48,
-    borderRadius: 12,
-    borderWidth: 1,
+  addToggleTextDark: { color: colors.background, fontSize: 14, fontWeight: '800' },
+  addToggleText: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  addFormCard: { padding: 12, gap: 8 },
+  nameAndPaxRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
+  nameCol: { flex: 1 },
+  paxCol: { gap: 3 },
+  stepperBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#09090B',
     borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    height: 42,
+    paddingHorizontal: 4,
+    gap: 6,
+  },
+  stepperBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stepperVal: {
     color: colors.text,
     fontSize: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    fontWeight: '800',
+    minWidth: 22,
+    textAlign: 'center',
   },
-  inputMultiline: { minHeight: 68, textAlignVertical: 'top' },
-  specRow: { flexDirection: 'row', gap: 8 },
-  specCol: { flex: 1 },
-  addButton: {
-    flexDirection: 'row',
-    gap: 8,
+  saveGuestBtn: {
     backgroundColor: colors.accent,
-    borderRadius: 14,
-    paddingHorizontal: 16,
+    borderRadius: 12,
+    minHeight: 48,
     marginTop: 4,
   },
-  addLabel: { color: colors.background, fontSize: 17, fontWeight: '800' },
-  rosterHeaderRow: {
+  saveGuestText: { color: colors.background, fontSize: 15, fontWeight: '800' },
+  rosterHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
+    paddingHorizontal: 2,
+    marginTop: 2,
   },
-  clearBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 6 },
-  clearBtnText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  guestCard: { gap: 8 },
-  guestHeader: {
+  rosterCountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rosterTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  resetBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 4 },
+  resetText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+  guestList: { gap: 6 },
+  guestRowCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  guestCompactRow: {
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     gap: 8,
   },
-  guestName: { color: colors.text, fontSize: 20, fontWeight: '800', flex: 1 },
-  delete: {
+  guestIndex: { color: colors.textSecondary, fontSize: 13, fontWeight: '800', width: 20 },
+  guestMainCol: { flex: 1 },
+  guestNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  guestName: { color: colors.text, fontSize: 15, fontWeight: '800', flexShrink: 1 },
+  paxBadge: {
+    backgroundColor: colors.accentDarkBg,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  paxBadgeText: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
+  guestSpecs: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+  medPill: {
+    maxWidth: 105,
+    backgroundColor: '#451A03',
+    borderColor: colors.warning,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  medPillText: { color: '#FDE68A', fontSize: 11, fontWeight: '800' },
+  expandedEdit: {
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    padding: 10,
+    gap: 8,
+    backgroundColor: '#09090B',
+  },
+  expandedPaxRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  expandedBottomRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  medInputWrap: { flex: 1 },
+  deleteBtn: {
     width: 44,
     height: 44,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  field: { gap: 3 },
+  fieldLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
+  input: {
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    fontSize: 15,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  specRow: { flexDirection: 'row', gap: 6 },
+  specCol: { flex: 1 },
   pressed: { opacity: 0.75 },
 });

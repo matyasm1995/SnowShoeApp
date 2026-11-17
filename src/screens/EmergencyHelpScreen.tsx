@@ -1,0 +1,369 @@
+import * as Location from 'expo-location';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { MapPin, Phone, RefreshCw, ShieldAlert } from 'lucide-react-native';
+
+import { CONFIG } from '../config';
+import { useActiveTour } from '../context/ActiveTourContext';
+import { ASSIST_STEPS, CORE_CONTACTS } from '../data/contacts';
+import { colors, sharedStyles, touchTarget } from '../theme';
+
+function formatDecimal(lat: number, lon: number): string {
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  return `${Math.abs(lat).toFixed(5)}° ${ns}, ${Math.abs(lon).toFixed(5)}° ${ew}`;
+}
+
+function toDegreesMinutes(val: number, posHemi: string, negHemi: string): string {
+  const hemi = val >= 0 ? posHemi : negHemi;
+  const abs = Math.abs(val);
+  const deg = Math.floor(abs);
+  const min = (abs - deg) * 60;
+  return `${deg}° ${min.toFixed(3)}' ${hemi}`;
+}
+
+export function EmergencyHelpScreen() {
+  const { activeRoute, activeAssignment } = useActiveTour();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [coords, setCoords] = useState<{
+    lat: number;
+    lon: number;
+    altM: number | null;
+    accuracyM: number | null;
+    updatedAt: Date;
+  } | null>(null);
+
+  const fetchPosition = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setError('Location permission denied. Enable GPS in Android Settings.');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last) {
+          setCoords({
+            lat: last.coords.latitude,
+            lon: last.coords.longitude,
+            altM:
+              last.coords.altitude !== null
+                ? Math.round(last.coords.altitude - 32)
+                : null,
+            accuracyM:
+              last.coords.accuracy !== null ? Math.round(last.coords.accuracy) : null,
+            updatedAt: new Date(last.timestamp ?? Date.now()),
+          });
+        }
+      } catch {}
+
+      const fresh = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.BestForNavigation,
+      });
+      setCoords({
+        lat: fresh.coords.latitude,
+        lon: fresh.coords.longitude,
+        altM:
+          fresh.coords.altitude !== null
+            ? Math.round(fresh.coords.altitude - 32)
+            : null,
+        accuracyM:
+          fresh.coords.accuracy !== null ? Math.round(fresh.coords.accuracy) : null,
+        updatedAt: new Date(fresh.timestamp ?? Date.now()),
+      });
+    } catch {
+      setError('Could not get live GPS fix. Move to open sky and tap Refresh.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchPosition();
+  }, [fetchPosition]);
+
+  const dial = async (phone: string) => {
+    const cleaned = phone.replace(/\s+/g, '');
+    try {
+      await Linking.openURL(`tel:${cleaned}`);
+    } catch {
+      Alert.alert('Dial Failed', `Dial ${phone} manually on your phone.`);
+    }
+  };
+
+  const openHjelp113 = async () => {
+    try {
+      const supported = await Linking.canOpenURL(CONFIG.links.hjelp113AppUri);
+      if (supported) {
+        await Linking.openURL(CONFIG.links.hjelp113AppUri);
+        return;
+      }
+    } catch {}
+    await dial('113');
+  };
+
+  return (
+    <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.content}>
+      {/* 1. Live GPS Position */}
+      <View style={styles.coordCard}>
+        <View style={styles.coordTop}>
+          <MapPin color={colors.danger} size={22} />
+          <Text style={styles.coordHeading}>YOUR GPS POSITION FOR 113</Text>
+          {loading ? <ActivityIndicator color={colors.danger} size="small" /> : null}
+        </View>
+
+        {coords ? (
+          <View style={styles.coordBody}>
+            <Text style={styles.coordBig} selectable>
+              {formatDecimal(coords.lat, coords.lon)}
+            </Text>
+            <Text style={styles.coordDms} selectable>
+              {toDegreesMinutes(coords.lat, 'N', 'S')} ·{' '}
+              {toDegreesMinutes(coords.lon, 'E', 'W')}
+            </Text>
+            <View style={styles.metaRow}>
+              <View style={styles.metaPill}>
+                <Text style={styles.metaLabel}>ALTITUDE</Text>
+                <Text style={styles.metaValue}>
+                  {coords.altM !== null ? `~${coords.altM} m` : '—'}
+                </Text>
+              </View>
+              <View style={styles.metaPill}>
+                <Text style={styles.metaLabel}>ACCURACY</Text>
+                <Text style={styles.metaValue}>
+                  {coords.accuracyM !== null ? `±${coords.accuracyM} m` : '—'}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.updatedText}>
+              Updated{' '}
+              {coords.updatedAt.toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              })}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.waitingText}>
+            {loading ? 'Reading GPS satellites…' : 'No GPS coordinates yet.'}
+          </Text>
+        )}
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <Pressable
+          onPress={() => void fetchPosition()}
+          disabled={loading}
+          style={({ pressed }) => [touchTarget, styles.refreshBtn, pressed && styles.pressed]}
+        >
+          <RefreshCw color={colors.text} size={18} />
+          <Text style={styles.refreshBtnText}>Refresh GPS Coordinates</Text>
+        </Pressable>
+      </View>
+
+      {/* 2. Active Area Context */}
+      <View style={sharedStyles.card}>
+        <Text style={styles.contextLabel}>ACTIVE AREA / TOUR</Text>
+        <Text style={styles.contextTitle}>{activeRoute.name}</Text>
+        <Text style={styles.contextSub}>
+          Area: {activeRoute.area}
+          {activeAssignment ? ` · ${activeAssignment.guestCount} guests` : ''}
+        </Text>
+      </View>
+
+      {/* 3. Call 113 & Hjelp 113 */}
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => void dial('113')}
+        style={({ pressed }) => [touchTarget, styles.callBtn, pressed && styles.pressed]}
+      >
+        <Phone color={colors.text} size={26} />
+        <View style={styles.callCopy}>
+          <Text style={styles.callTitle}>Call 113</Text>
+          <Text style={styles.callSub}>Norwegian Medical Emergency</Text>
+        </View>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => void openHjelp113()}
+        style={({ pressed }) => [touchTarget, styles.appBtn, pressed && styles.pressed]}
+      >
+        <ShieldAlert color={colors.text} size={22} />
+        <Text style={styles.appBtnText}>Open Official Hjelp 113 App</Text>
+      </Pressable>
+
+      {/* 4. ASSIST Accident Protocol */}
+      <Text style={sharedStyles.sectionTitle}>In Case of Accident (ASSIST)</Text>
+      <View style={sharedStyles.card}>
+        <View style={styles.assistList}>
+          {ASSIST_STEPS.map((step, idx) => (
+            <View key={`${step.letter}-${idx}`} style={styles.assistRow}>
+              <View style={styles.assistBadge}>
+                <Text style={styles.assistLetter}>{step.letter}</Text>
+              </View>
+              <View style={styles.assistCopy}>
+                <Text style={styles.assistTitle}>{step.title}</Text>
+                <Text style={styles.assistDetail}>{step.detail}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      {/* 5. Important Company, Towing, Taxi & Emergency Contacts */}
+      <Text style={sharedStyles.sectionTitle}>Key Numbers (Offline)</Text>
+      <View style={styles.contactsList}>
+        {CORE_CONTACTS.map((c) => (
+          <View key={c.id} style={styles.contactCard}>
+            <View style={styles.contactCopy}>
+              <Text style={styles.contactName}>{c.name}</Text>
+              <Text style={styles.contactSub}>
+                {c.phone}
+                {c.notes ? ` · ${c.notes}` : ''}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => void dial(c.phone)}
+              style={({ pressed }) => [touchTarget, styles.dialBtn, pressed && styles.pressed]}
+            >
+              <Phone color={colors.background} size={18} />
+              <Text style={styles.dialBtnText}>Call</Text>
+            </Pressable>
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  coordCard: {
+    backgroundColor: '#1C0909',
+    borderColor: colors.danger,
+    borderWidth: 2,
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+  },
+  coordTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  coordHeading: {
+    color: '#FCA5A5',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    flex: 1,
+  },
+  coordBody: { gap: 6 },
+  coordBig: { color: colors.text, fontSize: 22, fontWeight: '900' },
+  coordDms: { color: '#FECACA', fontSize: 15, fontWeight: '700' },
+  metaRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  metaPill: {
+    flex: 1,
+    backgroundColor: '#09090B',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+  },
+  metaLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  metaValue: { color: colors.text, fontSize: 18, fontWeight: '800', marginTop: 2 },
+  updatedText: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  waitingText: { color: colors.textSecondary, fontSize: 15 },
+  errorText: { color: '#FCA5A5', fontSize: 13, fontWeight: '700' },
+  refreshBtn: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+  },
+  refreshBtnText: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  contextLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800' },
+  contextTitle: { color: colors.text, fontSize: 18, fontWeight: '800', marginTop: 4 },
+  contextSub: { color: colors.textSecondary, fontSize: 14, marginTop: 2 },
+  callBtn: {
+    flexDirection: 'row',
+    gap: 14,
+    backgroundColor: colors.danger,
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  callCopy: { flex: 1 },
+  callTitle: { color: colors.text, fontSize: 24, fontWeight: '900' },
+  callSub: { color: '#FEE2E2', fontSize: 14, fontWeight: '600' },
+  appBtn: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+  },
+  appBtnText: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  assistList: { gap: 10 },
+  assistRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  assistBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.accentDarkBg,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  assistLetter: { color: colors.accentSoft, fontSize: 14, fontWeight: '900' },
+  assistCopy: { flex: 1, gap: 1 },
+  assistTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  assistDetail: { color: colors.textSecondary, fontSize: 13, lineHeight: 18 },
+  contactsList: { gap: 8 },
+  contactCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  contactCopy: { flex: 1, gap: 2 },
+  contactName: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  contactSub: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+  dialBtn: {
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: colors.accent,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    minHeight: 44,
+  },
+  dialBtnText: { color: colors.background, fontSize: 14, fontWeight: '800' },
+  pressed: { opacity: 0.78 },
+});

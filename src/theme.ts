@@ -6,7 +6,15 @@ export const colors = {
   border: '#27272A',
   text: '#FFFFFF',
   textSecondary: '#A1A1AA',
-  accent: '#38BDF8',
+  /** Tromsø Outdoor orange primary brand accent */
+  accent: '#F97316',
+  accentSoft: '#FB923C',
+  accentDarkBg: '#431407',
+  /** Ice blue reserved strictly for cold/snow/freezing weather indicators */
+  ice: '#38BDF8',
+  iceDarkBg: '#082F49',
+  success: '#4ADE80',
+  warning: '#FACC15',
   danger: '#EF4444',
 } as const;
 

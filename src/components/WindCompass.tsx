@@ -2,58 +2,113 @@ import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Line, Polygon, Text as SvgText } from 'react-native-svg';
 
 import { colors } from '../theme';
-import { calculateWindRelativeExposure } from '../utils/environmental';
+import { windCardinal } from '../utils/environmental';
 
 interface Props {
   windFromDeg: number | null;
   windSpeedMs: number;
   windGustMs: number;
-  ascentBearingDeg: number;
+  ascentBearingDeg?: number;
 }
 
-export function WindCompass({ windFromDeg, windSpeedMs, windGustMs, ascentBearingDeg }: Props) {
-  const size = 110;
+export function WindCompass({ windFromDeg, windSpeedMs, windGustMs }: Props) {
+  const size = 86;
   const center = size / 2;
-  const radius = center - 8;
+  const radius = center - 6;
 
-  const exposure = calculateWindRelativeExposure(ascentBearingDeg, windFromDeg);
-  const windAngle = windFromDeg ?? 0;
+  // Arrow spans across the full circle pointing where the wind blows TO:
+  // e.g. West wind (270°) -> blowToDeg = 90° -> arrow from 9 o'clock to 3 o'clock.
+  const blowToDeg = windFromDeg !== null ? (windFromDeg + 180) % 360 : 0;
+  const fromLabel =
+    windFromDeg !== null
+      ? `From ${windCardinal(windFromDeg)} (${Math.round(windFromDeg)}°)`
+      : 'Direction —';
 
   return (
     <View style={styles.card}>
-      <View style={styles.left}>
-        <Text style={styles.label}>WIND & EXPOSURE</Text>
-        <Text style={styles.speed}>
-          {windSpeedMs.toFixed(1)} <Text style={styles.unit}>m/s</Text>
-        </Text>
-        <Text style={styles.gust}>
-          Gusts up to <Text style={styles.gustHighlight}>{Math.round(windGustMs)} m/s</Text>
-        </Text>
-        <View style={styles.exposureBadge}>
-          <Text style={styles.exposureText}>{exposure}</Text>
-        </View>
+      <View style={styles.topRow}>
+        <Text style={styles.label}>WIND</Text>
+        <Text style={styles.dirText}>{fromLabel}</Text>
       </View>
 
-      <View style={styles.right}>
+      <View style={styles.bodyRow}>
+        <View style={styles.metricsCol}>
+          <Text style={styles.speed}>
+            {windSpeedMs.toFixed(1)}
+            <Text style={styles.unit}> m/s</Text>
+          </Text>
+          <Text style={styles.gust}>
+            Gust <Text style={styles.gustVal}>{Math.round(windGustMs)} m/s</Text>
+          </Text>
+        </View>
+
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-          {/* Compass Rose Ring */}
-          <Circle cx={center} cy={center} r={radius} stroke="#27272A" strokeWidth="2" fill="#09090B" />
-          <SvgText x={center} y={15} fill="#A1A1AA" fontSize="10" fontWeight="bold" textAnchor="middle">N</SvgText>
-          <SvgText x={size - 12} y={center + 3} fill="#A1A1AA" fontSize="10" fontWeight="bold" textAnchor="middle">E</SvgText>
-          <SvgText x={center} y={size - 7} fill="#A1A1AA" fontSize="10" fontWeight="bold" textAnchor="middle">S</SvgText>
-          <SvgText x={12} y={center + 3} fill="#A1A1AA" fontSize="10" fontWeight="bold" textAnchor="middle">W</SvgText>
+          <Circle
+            cx={center}
+            cy={center}
+            r={radius}
+            stroke={colors.border}
+            strokeWidth="2"
+            fill="#09090B"
+          />
+          <SvgText
+            x={center}
+            y={14}
+            fill={colors.textSecondary}
+            fontSize="9"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            N
+          </SvgText>
+          <SvgText
+            x={size - 10}
+            y={center + 3}
+            fill={colors.textSecondary}
+            fontSize="9"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            E
+          </SvgText>
+          <SvgText
+            x={center}
+            y={size - 7}
+            fill={colors.textSecondary}
+            fontSize="9"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            S
+          </SvgText>
+          <SvgText
+            x={10}
+            y={center + 3}
+            fill={colors.textSecondary}
+            fontSize="9"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            W
+          </SvgText>
 
-          {/* Route Ascent Direction (Cyan Dashed Line) */}
-          <G rotation={ascentBearingDeg} origin={`${center}, ${center}`}>
-            <Line x1={center} y1={center} x2={center} y2={18} stroke="#38BDF8" strokeWidth="2.5" strokeDasharray="3 3" />
-            <Polygon points={`${center},14 ${center - 4},22 ${center + 4},22`} fill="#38BDF8" />
-          </G>
-
-          {/* Wind Arrow (Direction Wind Blows FROM -> Deep Red/Orange) */}
-          <G rotation={windAngle} origin={`${center}, ${center}`}>
-            <Line x1={center} y1={center} x2={center} y2={22} stroke="#EF4444" strokeWidth="3" />
-            <Polygon points={`${center},18 ${center - 5},28 ${center + 5},28`} fill="#EF4444" />
-          </G>
+          {windFromDeg !== null ? (
+            <G rotation={blowToDeg} origin={`${center}, ${center}`}>
+              <Line
+                x1={center}
+                y1={size - 14}
+                x2={center}
+                y2={18}
+                stroke={colors.danger}
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <Polygon
+                points={`${center},12 ${center - 5.5},23 ${center + 5.5},23`}
+                fill={colors.danger}
+              />
+            </G>
+          ) : null}
         </Svg>
       </View>
     </View>
@@ -62,29 +117,56 @@ export function WindCompass({ windFromDeg, windSpeedMs, windGustMs, ascentBearin
 
 const styles = StyleSheet.create({
   card: {
+    flex: 1,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: 16,
-    padding: 14,
+    padding: 12,
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  topRow: {
+    gap: 2,
+  },
+  label: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  dirText: {
+    color: colors.accentSoft,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  bodyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 6,
   },
-  left: { flex: 1, gap: 4 },
-  label: { color: colors.textSecondary, fontSize: 12, fontWeight: '800', letterSpacing: 0.5 },
-  speed: { color: colors.text, fontSize: 32, fontWeight: '800' },
-  unit: { color: colors.textSecondary, fontSize: 16 },
-  gust: { color: colors.textSecondary, fontSize: 13 },
-  gustHighlight: { color: '#F59E0B', fontWeight: '800' },
-  exposureBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1E293B',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginTop: 4,
+  metricsCol: {
+    flex: 1,
+    gap: 2,
   },
-  exposureText: { color: '#38BDF8', fontSize: 12, fontWeight: '700' },
-  right: { alignItems: 'center', justifyContent: 'center' },
+  speed: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  unit: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  gust: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  gustVal: {
+    color: colors.warning,
+    fontWeight: '800',
+  },
 });
