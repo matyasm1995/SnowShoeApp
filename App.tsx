@@ -20,7 +20,7 @@ import {
   Users,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FloatingTrackingBubble } from './src/components/FloatingTrackingBubble';
@@ -37,6 +37,7 @@ import {
 } from './src/screens/TourOverviewScreen';
 import { TrackingScreen } from './src/screens/TrackingScreen';
 import { WeatherScreen } from './src/screens/WeatherScreen';
+import { WelcomeSetupScreen } from './src/screens/WelcomeSetupScreen';
 import { colors } from './src/theme';
 
 export type RootTabParamList = {
@@ -204,7 +205,19 @@ function MainTabsNavigator() {
 function AppShell() {
   const [currentRouteName, setCurrentRouteName] = useState<string | undefined>('ScheduleHome');
   const { trackedRoute } = useTracking();
-  const { selectManualRoute } = useActiveTour();
+  const { setupChecked, needsSetup, selectManualRoute } = useActiveTour();
+
+  if (!setupChecked) {
+    return (
+      <View style={styles.splashWrap}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+
+  if (needsSetup) {
+    return <WelcomeSetupScreen />;
+  }
 
   return (
     <NavigationContainer
@@ -279,6 +292,12 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  splashWrap: {
+    flex: 1,
+    backgroundColor: colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   rootWrap: {
     flex: 1,
     backgroundColor: colors.background,

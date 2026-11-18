@@ -10,9 +10,9 @@ const STORAGE_KEY_MANAGER_NOTES = 'cache:schedule_manager_notes_v8';
 const STORAGE_KEY_SYNC_TIME = 'cache:schedule_synced_at';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
 
-// Staff columns in Winter2627: BQ (index 68) through CY (index 102); CR (Michal) = index 95
+// Staff columns in 1.6 Bookings & work schedule: BQ (68) through CZ (103, Magne)
 const STAFF_COL_START = 68;
-const STAFF_COL_END = 102;
+const STAFF_COL_END = 105;
 const MICHAL_CR_COL_INDEX = 95;
 
 export type ContractType = 'full-time' | 'part-time';
@@ -144,6 +144,15 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
     };
   } catch {
     return null;
+  }
+}
+
+export async function isGuideProfileConfigured(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY_GUIDE_PROFILE);
+    return raw !== null && raw.length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -331,7 +340,6 @@ function findStaffColumnIndex(headerRow: string[], profile: GuideProfile): numbe
     }
   }
 
-  // Fallback for Michal's CR column (index 95) if header changed slightly
   if (
     (targetName === 'michal' || profile.initials.trim().toLowerCase() === 'mh') &&
     headerRow.length > MICHAL_CR_COL_INDEX
@@ -352,7 +360,8 @@ function isOnDutyMarker(cellLower: string): boolean {
     cellLower.includes('inventory') ||
     cellLower.includes('email') ||
     cellLower.includes('guiding') ||
-    cellLower.includes('course')
+    cellLower.includes('course') ||
+    cellLower.includes('military')
   );
 }
 
@@ -367,7 +376,8 @@ function isDayOffMarker(cellLower: string, guideInitialsLower: string): boolean 
     cellLower.includes('avspasering') ||
     cellLower.includes('unpaid') ||
     cellLower.includes('leave') ||
-    cellLower.includes('request')
+    cellLower.includes('request') ||
+    cellLower.includes('permisjon')
   );
 }
 

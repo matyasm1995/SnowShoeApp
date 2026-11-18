@@ -1,9 +1,10 @@
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -13,14 +14,14 @@ import {
 } from 'react-native';
 import {
   AlertTriangle,
+  Bell,
   Briefcase,
-  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  ClipboardCheck,
+  ClipboardList,
   MessageSquare,
   Palmtree,
   RefreshCw,
@@ -46,6 +47,10 @@ import {
   type AvalancheWarning,
   type WeatherAlertItem,
 } from '../services/alertsService';
+import {
+  calculateDutyStatus,
+  parseGuideAssignments,
+} from '../services/googleSheetsService';
 import type { HourlyForecastItem } from '../services/weatherService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 import { windCardinal } from '../utils/environmental';
@@ -138,7 +143,6 @@ export function ScheduleScreen() {
     profile,
     syncData,
     syncing,
-    statusMsg,
     selectedDate,
     assignments,
     dutyStatus,
@@ -156,14 +160,10 @@ export function ScheduleScreen() {
   } = useActiveTour();
 
   const [showAllRoutes, setShowAllRoutes] = useState(false);
+  const [showNextWeek, setShowNextWeek] = useState(false);
+  const [showNotesModal, setShowNotesModal] = useState(false);
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
-
-  useFocusEffect(
-    useCallback(() => {
-      void reloadProfileAndCache();
-    }, [reloadProfileAndCache])
-  );
 
   const closestAssignment =
     closestAssignmentIdx >= 0 ? assignments[closestAssignmentIdx] ?? null : null;
@@ -186,38 +186,28 @@ export function ScheduleScreen() {
     return charlottenlundRoute.weatherPoint;
   }, [homeCategory, tverrRoute.weatherPoint, coffeeRoute.weatherPoint, charlottenlundRoute.weatherPoint]);
 
-  useEffect(() => {
-    let active = true;
-    void fetchWeatherAlerts(alertPoint).then((items) => {
-      if (active) setWeatherAlerts(items);
-    });
-    if (homeCategory === 'hill_hike') {
-      void fetchTromsoAvalanche(selectedDate).then((av) => {
-        if (active) setAvalanche(av);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void reloadProfileAndCache();
+      void fetchWeatherAlerts(alertPoint).then((items) => {
+        if (active) setWeatherAlerts(items);
       });
-    } else {
-      setAvalanche(null);
-    }
-    return () => {
-      active = false;
-    };
-  }, [alertPoint, homeCategory, selectedDate]);
+      if (homeCategory === 'hill_hike') {
+        void fetchTromsoAvalanche(selectedDate).then((av) => {
+          if (active) setAvalanche(av);
+        });
+      } else {
+        setAvalanche(null);
+      }
+      return () => {
+        active = false;
+      };
+    }, [reloadProfileAndCache, alertPoint, homeCategory, selectedDate])
+  );
 
   const dateKey = useMemo(() => osloDateKey(selectedDate), [selectedDate]);
   const todayKey = useMemo(() => osloDateKey(new Date()), []);
-  const isSelectedToday = dateKey === todayKey;
-  const nowMinutes = getOsloMinutes(new Date());
-
-  const pendingReportIndex = useMemo(() => {
-    if (!isSelectedToday) return -1;
-    return assignments.findIndex((tour, idx) => {
-      const key = `${dateKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
-      if (submittedReports[key]) return false;
-      const end = tour.endMinutes ?? (tour.startMinutes !== null ? tour.startMinutes + 180 : null);
-      return end !== null && nowMinutes >= end;
-    });
-  }, [isSelectedToday, assignments, dateKey, submittedReports, nowMinutes]);
-
   const startMin = closestAssignment?.startMinutes ?? (homeCategory === 'hill_hike' ? 570 : null);
   const endMin = closestAssignment?.endMinutes ?? (homeCategory === 'hill_hike' ? 870 : null);
 
@@ -254,6 +244,74 @@ export function ScheduleScreen() {
 
   const bridgeAlert = bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
 
+  // Find any tour today that has ended without a submitted Trip Report
+  const pendingReportIdx = useMemo(() => {
+    const nowMin = getOsloMinutes(new Date());
+    for (let idx = 0; idx < assignments.length; idx++) {
+      const tour = assignments[idx];
+      if (!tour) continue;
+      const tourKey = `${dateKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
+      if (submittedReports[tourKey]) continue;
+      const ended =
+        dateKey < todayKey ||
+        (dateKey === todayKey && tour.endMinutes !== null && nowMin >= tour.endMinutes);
+      if (ended) return idx;
+    }
+    return -1;
+  }, [assignments, submittedReports, dateKey, todayKey]);
+
+  // Next 7 Days glance
+  const next7Days = useMemo(() => {
+    if (!syncData) return [];
+    const base = new Date();
+    const list: {
+      offset: number;
+      dayLabel: string;
+      statusText: string;
+      kind: 'tour' | 'off' | 'base';
+    }[] = [];
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(base);
+      d.setDate(d.getDate() + i);
+      const { assignments: dayTours, targetRowIdx } = parseGuideAssignments(
+        syncData.values,
+        syncData.notes,
+        syncData.comments,
+        profile.initials,
+        d
+      );
+      const status = calculateDutyStatus(syncData.values, targetRowIdx, profile, dayTours.length);
+      const label =
+        i === 0
+          ? 'Today'
+          : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+      if (dayTours.length > 0) {
+        const first = dayTours[0]!;
+        const extra = dayTours.length > 1 ? ` +${dayTours.length - 1}` : '';
+        list.push({
+          offset: i,
+          dayLabel: label,
+          statusText: `${first.startTimeLabel ?? ''} ${first.tourName.slice(0, 22)}${extra}`.trim(),
+          kind: 'tour',
+        });
+      } else if (status.type === 'day_off') {
+        list.push({ offset: i, dayLabel: label, statusText: 'Day Off', kind: 'off' });
+      } else {
+        list.push({ offset: i, dayLabel: label, statusText: status.title, kind: 'base' });
+      }
+    }
+
+    return list;
+  }, [syncData, profile]);
+
+  const highestNoteLevel = useMemo(() => {
+    if (managerNotes.some((n) => n.level === 'critical')) return 'critical';
+    if (managerNotes.some((n) => n.level === 'warning')) return 'warning';
+    return 'info';
+  }, [managerNotes]);
+
   const handleSync = async () => {
     try {
       await syncNow();
@@ -283,13 +341,13 @@ export function ScheduleScreen() {
     day: 'numeric',
     month: 'short',
   });
-
+  const isToday = new Date().toDateString() === selectedDate.toDateString();
   const avColors = avalanche ? avalancheDangerColor(avalanche.dangerLevel) : null;
 
   return (
     <ScrollView
       style={sharedStyles.screen}
-      contentContainerStyle={sharedStyles.content}
+      contentContainerStyle={styles.content}
       refreshControl={
         <RefreshControl
           refreshing={syncing}
@@ -299,151 +357,128 @@ export function ScheduleScreen() {
         />
       }
     >
-      {/* 1. Sync Header */}
-      <View style={[sharedStyles.card, styles.syncCard]}>
-        <View style={styles.syncLeft}>
-          <Text style={styles.syncTitle}>
-            {profile.fullName} ({profile.initials}) ·{' '}
-            {profile.contractType === 'full-time' ? '100%' : 'Part-Time'}
+      {/* 1. Slim Sync & Profile Bar */}
+      <View style={styles.slimSyncBar}>
+        <View style={styles.slimSyncText}>
+          <Text style={styles.syncName}>
+            {profile.fullName} ({profile.initials})
           </Text>
-          <Text style={styles.syncDetail} numberOfLines={1}>
-            {statusMsg}
+          <Text style={styles.syncTime}>
+            {syncData
+              ? `Synced ${formatClock(new Date(syncData.syncedAt))} (${syncData.fromCache ? 'Cache' : 'Live'})`
+              : 'Tap sync to load schedule'}
           </Text>
-          {syncData ? (
-            <Text style={styles.syncMeta}>
-              Synced {new Date(syncData.syncedAt).toLocaleTimeString()} (
-              {syncData.fromCache ? 'Offline Cache' : 'Live'})
-            </Text>
-          ) : null}
         </View>
-
         <Pressable
           onPress={() => void handleSync()}
           disabled={syncing}
-          style={({ pressed }) => [touchTarget, styles.syncBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.slimSyncBtn, pressed && styles.pressed]}
         >
           {syncing ? (
             <ActivityIndicator color={colors.background} size="small" />
           ) : (
-            <RefreshCw color={colors.background} size={22} />
+            <RefreshCw color={colors.background} size={18} />
           )}
         </Pressable>
       </View>
 
-      {/* 2. Manager's Noticeboard */}
-      {managerNotes.map((mn) => (
-        <View
-          key={mn.id}
-          style={[
-            styles.managerNoteCard,
-            mn.level === 'critical' && styles.mnCritical,
-            mn.level === 'warning' && styles.mnWarning,
-            mn.level === 'info' && styles.mnInfo,
-          ]}
-        >
-          <View style={styles.mnContent}>
-            <Text
-              style={[
-                styles.mnTag,
-                mn.level === 'critical' && { color: '#FCA5A5' },
-                mn.level === 'warning' && { color: colors.warning },
-                mn.level === 'info' && { color: colors.ice },
-              ]}
-            >
-              MANAGER {mn.level.toUpperCase()} · {mn.dateLabel}
-            </Text>
-            <Text style={styles.mnText}>{mn.note}</Text>
-          </View>
-          {mn.level !== 'critical' ? (
-            <Pressable
-              onPress={() => void dismissNote(mn.id)}
-              hitSlop={10}
-              style={styles.mnDismiss}
-            >
-              <X color={colors.textSecondary} size={18} />
-            </Pressable>
-          ) : null}
-        </View>
-      ))}
-
-      {/* 3. Post-Trip Report Reminder */}
-      {pendingReportIndex !== -1 ? (
-        <Pressable
-          onPress={() => openTour(pendingReportIndex)}
-          style={({ pressed }) => [styles.reportReminder, pressed && styles.pressed]}
-        >
-          <ClipboardCheck color={colors.background} size={22} />
-          <View style={styles.reminderCopy}>
-            <Text style={styles.reminderTitle}>Post-Trip Report Needed</Text>
-            <Text style={styles.reminderSub}>
-              {assignments[pendingReportIndex]?.tourName} finished — tap to submit report.
-            </Text>
-          </View>
-        </Pressable>
-      ) : null}
-
-      {/* 4. Date Bar */}
+      {/* 2. Date Bar */}
       <View style={styles.dateBar}>
         <Pressable
           onPress={() => shiftDate(-1)}
-          style={({ pressed }) => [touchTarget, styles.dateNavBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.dateNavBtn, pressed && styles.pressed]}
         >
-          <ChevronLeft color={colors.text} size={24} />
+          <ChevronLeft color={colors.text} size={22} />
         </Pressable>
 
         <Pressable onPress={resetToToday} style={styles.dateCenter}>
           <Text style={styles.dateLabelText}>{dateLabel}</Text>
-          <Text style={[styles.todayBadge, isSelectedToday && styles.todayBadgeActive]}>
-            {isSelectedToday ? 'TODAY' : 'TAP FOR TODAY'}
-          </Text>
+          {!isToday ? <Text style={styles.todayTap}>TAP FOR TODAY</Text> : null}
         </Pressable>
 
         <Pressable
           onPress={() => shiftDate(1)}
-          style={({ pressed }) => [touchTarget, styles.dateNavBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.dateNavBtn, pressed && styles.pressed]}
         >
-          <ChevronRight color={colors.text} size={24} />
+          <ChevronRight color={colors.text} size={22} />
         </Pressable>
       </View>
 
-      {/* 5. Duty Status & Next Days Off */}
-      <View
-        style={[
-          styles.dutyCard,
-          dutyStatus.type === 'day_off' && styles.dutyCardOff,
-          dutyStatus.type === 'base' && styles.dutyCardBase,
-          dutyStatus.type === 'tour' && styles.dutyCardTour,
-        ]}
-      >
-        <View style={styles.dutyIconCol}>
-          {dutyStatus.type === 'day_off' && <Palmtree color={colors.success} size={24} />}
-          {dutyStatus.type === 'base' && <Briefcase color={colors.warning} size={24} />}
-          {dutyStatus.type === 'tour' && <Calendar color={colors.accent} size={24} />}
-        </View>
-        <View style={styles.dutyTextCol}>
-          <Text
-            style={[
-              styles.dutyTitle,
-              dutyStatus.type === 'day_off' && { color: colors.success },
-              dutyStatus.type === 'base' && { color: colors.warning },
-              dutyStatus.type === 'tour' && { color: colors.accentSoft },
-            ]}
-          >
-            {dutyStatus.title}
+      {/* 3. Clickable Manager Notices Bar (1 compact bar -> modal) */}
+      {managerNotes.length > 0 ? (
+        <Pressable
+          onPress={() => setShowNotesModal(true)}
+          style={({ pressed }) => [
+            styles.noticePill,
+            highestNoteLevel === 'critical' && styles.noticePillCritical,
+            highestNoteLevel === 'warning' && styles.noticePillWarning,
+            highestNoteLevel === 'info' && styles.noticePillInfo,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Bell
+            color={
+              highestNoteLevel === 'critical'
+                ? colors.danger
+                : highestNoteLevel === 'warning'
+                  ? colors.warning
+                  : colors.ice
+            }
+            size={18}
+          />
+          <Text style={styles.noticePillText} numberOfLines={1}>
+            {managerNotes.length} Manager {managerNotes.length === 1 ? 'Note' : 'Notes'}:{' '}
+            {managerNotes[0]?.note}
           </Text>
-          <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
-          {upcomingDaysOff.length > 0 ? (
-            <Text style={styles.nextOffText}>
-              Next Days Off: {upcomingDaysOff.map((d) => d.dateLabel).join(' · ')}
+          <Text style={styles.noticePillAction}>Read →</Text>
+        </Pressable>
+      ) : null}
+
+      {/* 4. Post-Trip Report Reminder Banner */}
+      {pendingReportIdx !== -1 ? (
+        <Pressable
+          onPress={() => openTour(pendingReportIdx)}
+          style={({ pressed }) => [styles.reportReminder, pressed && styles.pressed]}
+        >
+          <ClipboardList color={colors.background} size={20} />
+          <Text style={styles.reportReminderText} numberOfLines={1}>
+            Report needed: {assignments[pendingReportIdx]?.tourName}
+          </Text>
+          <Text style={styles.reportReminderAction}>Fill →</Text>
+        </Pressable>
+      ) : null}
+
+      {/* 5. Duty Card ONLY when 0 tours assigned (Day Off or Base Duty) */}
+      {assignments.length === 0 ? (
+        <View
+          style={[
+            styles.dutyCard,
+            dutyStatus.type === 'day_off' ? styles.dutyCardOff : styles.dutyCardBase,
+          ]}
+        >
+          {dutyStatus.type === 'day_off' ? (
+            <Palmtree color={colors.success} size={24} />
+          ) : (
+            <Briefcase color={colors.warning} size={24} />
+          )}
+          <View style={styles.dutyTextCol}>
+            <Text
+              style={[
+                styles.dutyTitle,
+                { color: dutyStatus.type === 'day_off' ? colors.success : colors.warning },
+              ]}
+            >
+              {dutyStatus.title}
             </Text>
-          ) : null}
+            <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
+          </View>
         </View>
-      </View>
+      ) : null}
 
       {/* 6. Active MET Weather Warnings */}
       {weatherAlerts.length > 0 ? (
         <View style={styles.alertBanner}>
-          <AlertTriangle color={colors.warning} size={20} />
+          <AlertTriangle color={colors.warning} size={18} />
           <View style={styles.alertCopy}>
             <Text style={styles.alertTitle}>
               {weatherAlerts[0]?.event} ({weatherAlerts[0]?.severity})
@@ -455,14 +490,80 @@ export function ScheduleScreen() {
         </View>
       ) : null}
 
-      {/* 7. Tour-Driven Home Weather Card */}
+      {/* 7. YOUR TOURS (Front & Center!) */}
+      {assignments.map((tour, idx) => {
+        const transport =
+          [tour.vehicle, tour.shipName].filter(Boolean).join(' · ') || 'Transport TBD';
+        const tourKey = `${dateKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
+        const report = submittedReports[tourKey];
+        const ended =
+          dateKey < todayKey ||
+          (dateKey === todayKey &&
+            tour.endMinutes !== null &&
+            getOsloMinutes(new Date()) >= tour.endMinutes);
+
+        return (
+          <Pressable
+            key={`${tour.tourName}-${idx}`}
+            onPress={() => openTour(idx)}
+            style={({ pressed }) => [styles.tourCard, pressed && styles.pressed]}
+          >
+            <View style={styles.tourHeader}>
+              <Text style={styles.tourTag}>
+                {tour.isCharter ? 'CHARTER' : 'TOUR'}
+                {tour.startTimeLabel
+                  ? ` · ${tour.startTimeLabel}${tour.endTimeLabel ? `–${tour.endTimeLabel}` : ''}`
+                  : ''}
+              </Text>
+              <View style={styles.transportBadge}>
+                <Text style={styles.transportText}>{transport}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.tourTitle}>{tour.tourName}</Text>
+
+            <View style={styles.tourFooter}>
+              <View style={styles.paxChip}>
+                <Users color={colors.accent} size={15} />
+                <Text style={styles.paxText}>
+                  {tour.guestCount > 0 ? `${tour.guestCount} pax` : 'Open'}
+                </Text>
+              </View>
+
+              {report ? (
+                <View style={styles.reportDoneChip}>
+                  <CheckCircle2 color={colors.success} size={14} />
+                  <Text style={styles.reportDoneText}>Report Done</Text>
+                </View>
+              ) : ended ? (
+                <View style={styles.reportNeededChip}>
+                  <Text style={styles.reportNeededText}>Report Needed</Text>
+                </View>
+              ) : null}
+
+              {tour.commentsList.length > 0 || tour.cellNote ? (
+                <MessageSquare color={colors.ice} size={15} />
+              ) : null}
+
+              <Text style={styles.openHint}>Briefing →</Text>
+            </View>
+          </Pressable>
+        );
+      })}
+
+      {/* 8. Tour-Driven Weather Card */}
       {homeCategory === 'hill_hike' ? (
         <View style={[sharedStyles.card, styles.weatherCheckCard]}>
           <View style={styles.checkHeader}>
             <Wind color={colors.ice} size={18} />
             <Text style={styles.checkTitle}>HILL HIKE · SUMMIT WIND CHECK</Text>
             {avalanche && avColors ? (
-              <View style={[styles.avBadge, { backgroundColor: avColors.bg, borderColor: avColors.color }]}>
+              <View
+                style={[
+                  styles.avBadge,
+                  { backgroundColor: avColors.bg, borderColor: avColors.color },
+                ]}
+              >
                 <Text style={[styles.avBadgeText, { color: avColors.color }]}>
                   AVALANCHE {avalanche.dangerLevel}/5
                 </Text>
@@ -482,7 +583,9 @@ export function ScheduleScreen() {
               </Text>
               <Text style={styles.summitGust}>
                 Gust {Math.round(tverrSummary.peakGustMs)} m/s ·{' '}
-                {tverrSummary.repHour ? formatTemperature(tverrSummary.repHour.airTemperatureC) : '—'}
+                {tverrSummary.repHour
+                  ? formatTemperature(tverrSummary.repHour.airTemperatureC)
+                  : '—'}
               </Text>
             </View>
 
@@ -497,7 +600,9 @@ export function ScheduleScreen() {
               </Text>
               <Text style={styles.summitGust}>
                 Gust {Math.round(rundSummary.peakGustMs)} m/s ·{' '}
-                {rundSummary.repHour ? formatTemperature(rundSummary.repHour.airTemperatureC) : '—'}
+                {rundSummary.repHour
+                  ? formatTemperature(rundSummary.repHour.airTemperatureC)
+                  : '—'}
               </Text>
             </View>
           </View>
@@ -525,7 +630,9 @@ export function ScheduleScreen() {
           </View>
           <View style={styles.singleSummaryRow}>
             <Text style={styles.singleSummaryTemp}>
-              {coffeeSummary.repHour ? formatTemperature(coffeeSummary.repHour.airTemperatureC) : '—'}
+              {coffeeSummary.repHour
+                ? formatTemperature(coffeeSummary.repHour.airTemperatureC)
+                : '—'}
             </Text>
             <Text style={styles.singleSummaryWind}>
               Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
@@ -557,7 +664,9 @@ export function ScheduleScreen() {
           </View>
           <View style={styles.singleSummaryRow}>
             <Text style={styles.singleSummaryTemp}>
-              {charlSummary.repHour ? formatTemperature(charlSummary.repHour.airTemperatureC) : '—'}
+              {charlSummary.repHour
+                ? formatTemperature(charlSummary.repHour.airTemperatureC)
+                : '—'}
             </Text>
             <Text style={styles.singleSummaryWind}>
               Wind {charlSummary.peakWindMs.toFixed(1)} m/s{' '}
@@ -568,72 +677,61 @@ export function ScheduleScreen() {
         </View>
       )}
 
-      {/* 8. Assigned Tours List */}
-      {assignments.length > 0 ? (
-        <Text style={sharedStyles.sectionTitle}>Your Tours ({assignments.length})</Text>
+      {/* 9. Next Days Off Strip */}
+      {upcomingDaysOff.length > 0 ? (
+        <View style={styles.daysOffStrip}>
+          <Palmtree color={colors.success} size={16} />
+          <Text style={styles.daysOffText}>
+            Next Off: {upcomingDaysOff.map((d) => d.dateLabel).join(' · ')}
+          </Text>
+        </View>
       ) : null}
 
-      {assignments.map((tour, idx) => {
-        const transport =
-          [tour.vehicle, tour.shipName].filter(Boolean).join(' · ') || 'Transport TBD';
-        const key = `${dateKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
-        const report = submittedReports[key];
-        const end = tour.endMinutes ?? (tour.startMinutes !== null ? tour.startMinutes + 180 : null);
-        const reportNeeded = !report && isSelectedToday && end !== null && nowMinutes >= end;
-
-        return (
+      {/* 10. Next 7 Days Simple Schedule */}
+      {next7Days.length > 0 ? (
+        <>
           <Pressable
-            key={`${tour.tourName}-${idx}`}
-            onPress={() => openTour(idx)}
-            style={({ pressed }) => [styles.tourCard, pressed && styles.pressed]}
+            onPress={() => setShowNextWeek((v) => !v)}
+            style={({ pressed }) => [touchTarget, styles.browseToggle, pressed && styles.pressed]}
           >
-            <View style={styles.tourHeader}>
-              <Text style={styles.tourTag}>
-                {tour.isCharter ? 'CHARTER' : 'REGULAR TOUR'}
-                {tour.startTimeLabel
-                  ? ` · ${tour.startTimeLabel}${tour.endTimeLabel ? `–${tour.endTimeLabel}` : ''}`
-                  : ''}
-              </Text>
-              <View style={styles.transportBadge}>
-                <Text style={styles.transportText}>{transport}</Text>
-              </View>
-            </View>
-
-            <Text style={styles.tourTitle}>{tour.tourName}</Text>
-
-            <View style={styles.tourFooter}>
-              <View style={styles.paxChip}>
-                <Users color={colors.accent} size={15} />
-                <Text style={styles.paxText}>
-                  {tour.guestCount > 0 ? `${tour.guestCount} guests` : 'Open'}
-                </Text>
-              </View>
-
-              {tour.commentsList.length > 0 || tour.cellNote ? (
-                <View style={styles.paxChip}>
-                  <MessageSquare color={colors.ice} size={15} />
-                  <Text style={styles.noteIndicator}>Notes</Text>
-                </View>
-              ) : null}
-
-              {report ? (
-                <View style={styles.reportDoneBadge}>
-                  <CheckCircle2 color={colors.success} size={13} />
-                  <Text style={styles.reportDoneText}>Report Done</Text>
-                </View>
-              ) : reportNeeded ? (
-                <View style={styles.reportNeededBadge}>
-                  <Text style={styles.reportNeededText}>Report Needed</Text>
-                </View>
-              ) : null}
-
-              <Text style={styles.openHint}>Briefing →</Text>
-            </View>
+            <Text style={styles.browseToggleText}>Next 7 Days Schedule</Text>
+            {showNextWeek ? (
+              <ChevronUp color={colors.textSecondary} size={20} />
+            ) : (
+              <ChevronDown color={colors.textSecondary} size={20} />
+            )}
           </Pressable>
-        );
-      })}
 
-      {/* 9. Browse All Routes Fallback */}
+          {showNextWeek ? (
+            <View style={styles.weekCard}>
+              {next7Days.map((item) => (
+                <Pressable
+                  key={item.dayLabel}
+                  onPress={() => {
+                    resetToToday();
+                    if (item.offset > 0) shiftDate(item.offset);
+                  }}
+                  style={styles.weekRow}
+                >
+                  <Text style={styles.weekDay}>{item.dayLabel}</Text>
+                  <Text
+                    style={[
+                      styles.weekStatus,
+                      item.kind === 'off' && { color: colors.success },
+                      item.kind === 'tour' && { color: colors.accentSoft, fontWeight: '800' },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.statusText}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </>
+      ) : null}
+
+      {/* 11. Browse All Routes Fallback */}
       <Pressable
         onPress={() => setShowAllRoutes((v) => !v)}
         style={({ pressed }) => [touchTarget, styles.browseToggle, pressed && styles.pressed]}
@@ -663,53 +761,92 @@ export function ScheduleScreen() {
           ))}
         </View>
       ) : null}
+
+      {/* Manager Noticeboard Full-Text Modal */}
+      <Modal
+        visible={showNotesModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowNotesModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Manager Noticeboard</Text>
+              <Pressable onPress={() => setShowNotesModal(false)} style={styles.modalClose}>
+                <X color={colors.text} size={22} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalBody}>
+              {managerNotes.length === 0 ? (
+                <Text style={sharedStyles.secondary}>All notices dismissed.</Text>
+              ) : (
+                managerNotes.map((mn) => (
+                  <View
+                    key={mn.id}
+                    style={[
+                      styles.modalNoteCard,
+                      mn.level === 'critical' && styles.noticePillCritical,
+                      mn.level === 'warning' && styles.noticePillWarning,
+                      mn.level === 'info' && styles.noticePillInfo,
+                    ]}
+                  >
+                    <View style={styles.modalNoteContent}>
+                      <Text style={styles.modalNoteLevel}>
+                        {mn.level.toUpperCase()}
+                      </Text>
+                      <Text style={styles.modalNoteText}>{mn.note}</Text>
+                    </View>
+                    {mn.level !== 'critical' ? (
+                      <Pressable
+                        hitSlop={10}
+                        onPress={() => void dismissNote(mn.id)}
+                        style={styles.modalDismiss}
+                      >
+                        <X color={colors.textSecondary} size={18} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  syncCard: {
+  content: {
+    padding: 14,
+    paddingBottom: 32,
+    gap: 10,
+  },
+  slimSyncBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     gap: 10,
   },
-  syncLeft: { flex: 1, gap: 3 },
-  syncTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  syncDetail: { color: colors.textSecondary, fontSize: 13 },
-  syncMeta: { color: colors.accentSoft, fontSize: 12 },
-  syncBtn: {
+  slimSyncText: { flex: 1 },
+  syncName: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  syncTime: { color: colors.accentSoft, fontSize: 11, fontWeight: '600' },
+  slimSyncBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: colors.accent,
-    borderRadius: 14,
-    minWidth: 56,
-    minHeight: 56,
-  },
-  managerNoteCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    padding: 12,
-    gap: 10,
-  },
-  mnCritical: { backgroundColor: '#450A0A', borderColor: colors.danger },
-  mnWarning: { backgroundColor: '#451A03', borderColor: colors.warning },
-  mnInfo: { backgroundColor: '#082F49', borderColor: colors.ice },
-  mnContent: { flex: 1, gap: 3 },
-  mnTag: { fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
-  mnText: { color: colors.text, fontSize: 14, fontWeight: '600', lineHeight: 20 },
-  mnDismiss: { padding: 4 },
-  reportReminder: {
-    flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: colors.warning,
-    borderRadius: 14,
-    padding: 12,
   },
-  reminderCopy: { flex: 1, gap: 2 },
-  reminderTitle: { color: colors.background, fontSize: 15, fontWeight: '900' },
-  reminderSub: { color: colors.background, fontSize: 12, fontWeight: '700' },
   dateBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -717,30 +854,52 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 8,
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    minHeight: 48,
   },
-  dateNavBtn: { width: 52, height: 52 },
-  dateCenter: { alignItems: 'center', paddingVertical: 8 },
-  dateLabelText: { color: colors.text, fontSize: 18, fontWeight: '800' },
-  todayBadge: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', marginTop: 2 },
-  todayBadgeActive: { color: colors.accent },
+  dateNavBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  dateCenter: { alignItems: 'center', paddingVertical: 4 },
+  dateLabelText: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  todayTap: { color: colors.accent, fontSize: 10, fontWeight: '800' },
+  noticePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  noticePillCritical: { backgroundColor: '#450A0A', borderColor: colors.danger },
+  noticePillWarning: { backgroundColor: '#451A03', borderColor: colors.warning },
+  noticePillInfo: { backgroundColor: '#082F49', borderColor: colors.ice },
+  noticePillText: { flex: 1, color: colors.text, fontSize: 13, fontWeight: '700' },
+  noticePillAction: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  reportReminder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warning,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  reportReminderText: { flex: 1, color: colors.background, fontSize: 13, fontWeight: '800' },
+  reportReminderAction: { color: colors.background, fontSize: 13, fontWeight: '900' },
   dutyCard: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1.5,
     gap: 12,
   },
   dutyCardOff: { backgroundColor: '#064E3B', borderColor: colors.success },
   dutyCardBase: { backgroundColor: '#422006', borderColor: colors.warning },
-  dutyCardTour: { backgroundColor: colors.accentDarkBg, borderColor: colors.accent },
-  dutyIconCol: { justifyContent: 'center', alignItems: 'center' },
   dutyTextCol: { flex: 1, gap: 2 },
   dutyTitle: { fontSize: 16, fontWeight: '800' },
   dutyDetail: { color: colors.text, fontSize: 13 },
-  nextOffText: { color: colors.success, fontSize: 12, fontWeight: '700', marginTop: 3 },
   alertBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -748,53 +907,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#451A03',
     borderColor: colors.warning,
     borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
-  },
-  alertCopy: { flex: 1, gap: 2 },
-  alertTitle: { color: colors.warning, fontSize: 14, fontWeight: '800' },
-  alertDetail: { color: colors.text, fontSize: 12 },
-  weatherCheckCard: { gap: 10, padding: 14 },
-  checkHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  checkTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, flex: 1 },
-  avBadge: {
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  avBadgeText: { fontSize: 10, fontWeight: '800' },
-  summitRow: { flexDirection: 'row', gap: 8 },
-  summitBox: {
-    flex: 1,
-    backgroundColor: '#09090B',
-    borderColor: colors.border,
-    borderWidth: 1,
     borderRadius: 12,
     padding: 10,
-    gap: 2,
   },
-  summitName: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
-  summitWind: { color: colors.text, fontSize: 17, fontWeight: '800' },
-  summitGust: { color: colors.ice, fontSize: 12, fontWeight: '700' },
-  singleSummaryRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  singleSummaryTemp: { color: colors.text, fontSize: 26, fontWeight: '800' },
-  singleSummaryWind: { color: colors.ice, fontSize: 14, fontWeight: '700' },
-  bridgeStrip: {
-    backgroundColor: '#09090B',
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  bridgeStripDanger: { backgroundColor: '#450A0A', borderColor: colors.danger },
-  bridgeText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  alertCopy: { flex: 1, gap: 2 },
+  alertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertDetail: { color: colors.text, fontSize: 12 },
   tourCard: {
     backgroundColor: colors.surface,
     borderColor: colors.accent,
@@ -823,33 +941,81 @@ const styles = StyleSheet.create({
   tourFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
     gap: 10,
     marginTop: 2,
   },
   paxChip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   paxText: { color: colors.text, fontSize: 14, fontWeight: '700' },
-  noteIndicator: { color: colors.ice, fontSize: 12, fontWeight: '700' },
-  reportDoneBadge: {
+  reportDoneChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#064E3B',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    backgroundColor: '#052E16',
+    borderColor: colors.success,
+    borderWidth: 1,
     borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   reportDoneText: { color: colors.success, fontSize: 11, fontWeight: '800' },
-  reportNeededBadge: {
+  reportNeededChip: {
     backgroundColor: '#451A03',
     borderColor: colors.warning,
     borderWidth: 1,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
     borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   reportNeededText: { color: colors.warning, fontSize: 11, fontWeight: '800' },
   openHint: { color: colors.accent, fontSize: 14, fontWeight: '800', marginLeft: 'auto' },
+  weatherCheckCard: { gap: 10, padding: 12 },
+  checkHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, flex: 1 },
+  avBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  avBadgeText: { fontSize: 10, fontWeight: '800' },
+  summitRow: { flexDirection: 'row', gap: 8 },
+  summitBox: {
+    flex: 1,
+    backgroundColor: '#09090B',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    gap: 2,
+  },
+  summitName: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
+  summitWind: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  summitGust: { color: colors.ice, fontSize: 12, fontWeight: '700' },
+  singleSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  singleSummaryTemp: { color: colors.text, fontSize: 24, fontWeight: '800' },
+  singleSummaryWind: { color: colors.ice, fontSize: 13, fontWeight: '700' },
+  bridgeStrip: {
+    backgroundColor: '#09090B',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  bridgeStripDanger: { backgroundColor: '#450A0A', borderColor: colors.danger },
+  bridgeText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  daysOffStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#052E16',
+    borderColor: colors.success,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  daysOffText: { flex: 1, color: colors.success, fontSize: 12, fontWeight: '800' },
   browseToggle: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -858,12 +1024,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 14,
-    marginTop: 4,
   },
   browseToggleText: { color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
+  weekCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  weekRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomColor: '#18181B',
+    borderBottomWidth: 1,
+    gap: 10,
+  },
+  weekDay: { color: colors.text, fontSize: 13, fontWeight: '800', width: 95 },
+  weekStatus: { color: colors.textSecondary, fontSize: 13, flex: 1, textAlign: 'right' },
   routesList: { gap: 8 },
   routeRow: {
-    minHeight: 56,
+    minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -877,5 +1061,42 @@ const styles = StyleSheet.create({
   routeLeft: { flex: 1, gap: 2 },
   routeName: { color: colors.text, fontSize: 16, fontWeight: '700' },
   routeArea: { color: colors.textSecondary, fontSize: 12 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopColor: colors.accent,
+    borderTopWidth: 2,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  modalTitle: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  modalClose: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
+  modalBody: { padding: 16, gap: 10, paddingBottom: 32 },
+  modalNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderWidth: 1.5,
+    borderRadius: 14,
+    padding: 12,
+    gap: 10,
+  },
+  modalNoteContent: { flex: 1, gap: 4 },
+  modalNoteLevel: { color: colors.textSecondary, fontSize: 11, fontWeight: '900' },
+  modalNoteText: { color: colors.text, fontSize: 15, lineHeight: 22 },
+  modalDismiss: { padding: 4 },
   pressed: { opacity: 0.75 },
 });

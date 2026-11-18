@@ -29,7 +29,7 @@ import {
 import { colors } from '../theme';
 
 const TROMSO_DEFAULT_GEOID_OFFSET_M = -32;
-const BG_PROMPTED_KEY = 'tracking:bg_prompted_v1';
+const ASKED_BG_LOCATION_KEY = 'pref:asked_bg_location_v1';
 
 export type GatePaceStatus = 'upcoming' | 'reached' | 'late' | 'turnaround_now';
 
@@ -263,11 +263,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
         if (trackMatch.distanceAlongTrackKm >= targetDist - 0.2) reached = true;
       } else if (trackedRoute.trackingMode === 'elevation') {
-        // Intermediate gates require exact elevation; Top/Turnaround keeps a -10m summit buffer
-        const threshold = gate.isTurnaround
-          ? gate.targetElevationMeters - 10
-          : gate.targetElevationMeters;
-        if (currentElev !== null && currentElev >= threshold) {
+        // Top / turnaround gates keep a -10m buffer; intermediate gates require exact elevation
+        const bufferM = gate.isTurnaround ? 10 : 0;
+        if (currentElev !== null && currentElev >= gate.targetElevationMeters - bufferM) {
           reached = true;
         }
       }
@@ -290,7 +288,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     async (route: ActivityRoute) => {
       setGpsError(null);
 
-      // Check existing foreground permission before prompting
       let fg = await Location.getForegroundPermissionsAsync();
       if (fg.status !== 'granted') {
         fg = await Location.requestForegroundPermissionsAsync();
@@ -343,14 +340,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
 
-      // Check background permission once without nagging on every start
       let bgStarted = false;
       try {
         let bg = await Location.getBackgroundPermissionsAsync();
         if (bg.status !== 'granted') {
-          const alreadyAsked = await AsyncStorage.getItem(BG_PROMPTED_KEY);
-          if (!alreadyAsked && bg.canAskAgain) {
-            await AsyncStorage.setItem(BG_PROMPTED_KEY, '1');
+          const alreadyAsked = await AsyncStorage.getItem(ASKED_BG_LOCATION_KEY);
+          if (alreadyAsked !== 'true') {
+            await AsyncStorage.setItem(ASKED_BG_LOCATION_KEY, 'true');
             bg = await Location.requestBackgroundPermissionsAsync();
           }
         }

@@ -1,9 +1,8 @@
+import { CONFIG } from '../config';
 import { loadJson, saveJson } from './persistence';
 
-const FORM_BASE =
-  'https://docs.google.com/forms/d/e/1FAIpQLSet1ZR3f0FfgFLuB1IqgSPxjWaq72tMdtfks9EEpz__FYFeFA';
-const FORM_RESPONSE_URL = `${FORM_BASE}/formResponse`;
-const FORM_VIEW_URL = `${FORM_BASE}/viewform`;
+const FORM_VIEW_URL =
+  'https://docs.google.com/forms/d/e/1FAIpQLSet1ZR3f0FfgFLuB1IqgSPxjWaq72tMdtfks9EEpz__FYFeFA/viewform';
 
 const SUBMITTED_KEY = 'reports:submitted:v1';
 const QUEUE_KEY = 'reports:queue:v1';
@@ -27,12 +26,12 @@ export type FormTripOption = (typeof FORM_TRIP_OPTIONS)[number];
 
 export interface TripReportPayload {
   tourKey: string;
-  dateIso: string; // YYYY-MM-DD
+  dateIso: string;
   guideName: string;
   tripOption: FormTripOption;
   otherTripText?: string;
   attendedPax: number;
-  hillHikeLocation: string; // 'Tverrfjellet' | 'Rundfjellet' | ''
+  hillHikeLocation: string;
   notes: string;
 }
 
@@ -53,12 +52,10 @@ export function matchFormTripOption(rawTourName: string, isHillHike: boolean): F
 
   const lower = rawTourName.toLowerCase();
 
-  // Coffee trip
   if (lower.includes('coffe') || lower.includes('coffee') || lower.includes('cafe')) {
     return 'Coffee trip at 9:00';
   }
 
-  // Ship tours (14:15 or Hurtigruten / Havila / M5 / HN5)
   const isShip =
     lower.includes('14:15') ||
     lower.includes('14.15') ||
@@ -68,22 +65,24 @@ export function matchFormTripOption(rawTourName: string, isHillHike: boolean): F
     lower.includes('hurtigruten') ||
     lower.includes('havila');
 
-  // Snowshoe
   if (lower.includes('snowshoe') || lower.includes('w 103') || lower.includes('tromso')) {
     if (isShip) return 'HG snowshoe at 14:15';
     return 'Snowshoe trip in Tromsoya at 10:00';
   }
 
-  // Ski
   if (lower.includes('ski')) {
     if (isShip) return 'HG ski at 14:15';
-    if (lower.includes('13:30') || lower.includes('13.30') || lower.includes('14:30') || lower.includes('14.30')) {
+    if (
+      lower.includes('13:30') ||
+      lower.includes('13.30') ||
+      lower.includes('14:30') ||
+      lower.includes('14.30')
+    ) {
       return 'XC ski trip at 13:30';
     }
     return 'XC ski trip at 9:00';
   }
 
-  // Bike / Fatbike
   if (lower.includes('bike') || lower.includes('fatbik')) {
     if (isShip) return 'HG bike trip 14:15';
     if (lower.includes('14:30') || lower.includes('14.30')) {
@@ -98,7 +97,7 @@ export function matchFormTripOption(rawTourName: string, isHillHike: boolean): F
   return 'Other';
 }
 
-function buildFormBody(payload: TripReportPayload): URLSearchParams {
+export function buildPrefilledReportUrl(payload: TripReportPayload): string {
   const params = new URLSearchParams();
   params.append('entry.697979218', payload.dateIso);
   params.append('entry.1132009206', payload.guideName);
@@ -122,33 +121,30 @@ function buildFormBody(payload: TripReportPayload): URLSearchParams {
   }
 
   params.append('entry.2061766555', payload.notes.trim());
-  return params;
-}
-
-export function buildPrefilledReportUrl(payload: TripReportPayload): string {
-  const params = buildFormBody(payload);
   return `${FORM_VIEW_URL}?usp=pp_url&${params.toString()}`;
 }
 
-async function postToGoogleForm(payload: TripReportPayload): Promise<void> {
+async function postViaAppsScript(payload: TripReportPayload): Promise<void> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 15000);
 
   try {
-    const body = buildFormBody(payload).toString();
-    const res = await fetch(FORM_RESPONSE_URL, {
+    const res = await fetch(CONFIG.sheet.scriptUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'text/plain;charset=utf-8',
       },
-      body,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
-    // 400 Bad Request indicates form rejected invalid choice/data.
-    // 200, 302 or status 0 (opaque redirect) are accepted submissions.
-    if (res.status >= 400) {
-      throw new Error(`Google Form validation error (HTTP ${res.status})`);
+    if (!res.ok) {
+      throw new Error(`Apps Script HTTP ${res.status}`);
+    }
+
+    const json = (await res.json()) as { status?: string; message?: string };
+    if (json.status !== 'success') {
+      throw new Error(json.message || 'Apps Script rejected trip report.');
     }
   } finally {
     clearTimeout(timer);
@@ -170,7 +166,7 @@ export async function submitOrQueueTripReport(
 ): Promise<{ sentLive: boolean; record: SubmittedTripReportRecord }> {
   let sentLive = false;
   try {
-    await postToGoogleForm(payload);
+    await postViaAppsScript(payload);
     sentLive = true;
   } catch {
     sentLive = false;
@@ -212,7 +208,7 @@ export async function flushQueuedTripReports(): Promise<number> {
 
   for (const item of queue) {
     try {
-      await postToGoogleForm(item);
+      await postViaAppsScript(item);
       sentCount++;
       const existing = submitted[item.tourKey];
       if (existing) {

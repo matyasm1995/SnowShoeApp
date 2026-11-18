@@ -4,9 +4,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
+import { AppState } from 'react-native';
 
 import { CONFIG } from '../config';
 import {
@@ -20,7 +22,9 @@ import {
   findUpcomingDaysOff,
   getCachedSchedule,
   getGuideProfile,
+  isGuideProfileConfigured,
   parseGuideAssignments,
+  saveGuideProfile,
   type DutyStatus,
   type GuideAssignment,
   type GuideProfile,
@@ -33,12 +37,15 @@ import {
   parseManagerNotes,
   type ManagerNoteItem,
 } from '../services/managerNotesService';
+import { syncTripReportNotifications } from '../services/notificationService';
 import {
   flushQueuedTripReports,
   loadSubmittedReports,
   type SubmittedTripReportRecord,
 } from '../services/tripReportService';
 import { osloDateKey } from '../utils/format';
+
+const AUTO_SYNC_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
 
 function getOsloMinutesOfDay(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -86,6 +93,8 @@ export function pickClosestAssignmentIndex(
 }
 
 export interface ActiveTourContextValue {
+  setupChecked: boolean;
+  needsSetup: boolean;
   profile: GuideProfile;
   syncData: SyncPayload | null;
   syncing: boolean;
@@ -110,6 +119,7 @@ export interface ActiveTourContextValue {
   resetToToday: () => void;
   syncNow: () => Promise<void>;
   reloadProfileAndCache: () => Promise<void>;
+  completeInitialSetup: (newProfile: GuideProfile) => Promise<void>;
   dismissNote: (id: string) => Promise<void>;
   refreshReports: () => Promise<void>;
 }
@@ -124,6 +134,8 @@ const DEFAULT_PROFILE: GuideProfile = {
 const ActiveTourContext = createContext<ActiveTourContextValue | null>(null);
 
 export function ActiveTourProvider({ children }: { children: ReactNode }) {
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [profile, setProfile] = useState<GuideProfile>(DEFAULT_PROFILE);
   const [syncData, setSyncData] = useState<SyncPayload | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -139,18 +151,66 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     Record<string, SubmittedTripReportRecord>
   >({});
 
+  const autoSyncingRef = useRef(false);
+
   const refreshReports = useCallback(async () => {
     const reports = await loadSubmittedReports();
     setSubmittedReports(reports);
   }, []);
 
+  const syncNow = useCallback(async () => {
+    setSyncing(true);
+    setStatusMsg('Downloading schedule from Google...');
+    try {
+      const freshProfile = await getGuideProfile();
+      setProfile(freshProfile);
+      const fresh = await downloadSchedule();
+      setSyncData(fresh);
+      setStatusMsg(
+        `Synced ${fresh.values.length} rows & ${fresh.comments.length} comments.`
+      );
+      const flushed = await flushQueuedTripReports();
+      if (flushed > 0) {
+        await refreshReports();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed';
+      setStatusMsg(`Sync error: ${msg}`);
+      throw err;
+    } finally {
+      setSyncing(false);
+    }
+  }, [refreshReports]);
+
+  const maybeAutoSync = useCallback(
+    async (cached: SyncPayload | null, configured: boolean) => {
+      if (!configured || autoSyncingRef.current) return;
+      const lastMs = cached?.syncedAt ? Date.parse(cached.syncedAt) : 0;
+      const isStale = !Number.isFinite(lastMs) || Date.now() - lastMs > AUTO_SYNC_MAX_AGE_MS;
+      if (!isStale) return;
+
+      autoSyncingRef.current = true;
+      try {
+        await syncNow();
+      } catch {
+        // Offline at trailhead: keep cached schedule quietly
+      } finally {
+        autoSyncingRef.current = false;
+      }
+    },
+    [syncNow]
+  );
+
   const reloadProfileAndCache = useCallback(async () => {
-    const [p, cached, dismissed, reports] = await Promise.all([
+    const [configured, p, cached, dismissed, reports] = await Promise.all([
+      isGuideProfileConfigured(),
       getGuideProfile(),
       getCachedSchedule(),
       loadDismissedNoteIds(),
       loadSubmittedReports(),
     ]);
+    setNeedsSetup(!configured);
+    setSetupChecked(true);
     setProfile(p);
     setDismissedNoteIds(dismissed);
     setSubmittedReports(reports);
@@ -160,16 +220,44 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     } else {
       setStatusMsg('No schedule cached yet. Tap Sync.');
     }
+
+    void maybeAutoSync(cached, configured);
+
     void flushQueuedTripReports().then((flushed) => {
       if (flushed > 0) {
         void loadSubmittedReports().then(setSubmittedReports);
       }
     });
-  }, []);
+  }, [maybeAutoSync]);
 
   useEffect(() => {
     void reloadProfileAndCache();
   }, [reloadProfileAndCache]);
+
+  // 30-minute auto-sync when returning to foreground
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && !needsSetup) {
+        void getCachedSchedule().then((cached) => maybeAutoSync(cached, true));
+      }
+    });
+    return () => sub.remove();
+  }, [needsSetup, maybeAutoSync]);
+
+  const completeInitialSetup = useCallback(
+    async (newProfile: GuideProfile) => {
+      await saveGuideProfile(newProfile);
+      setProfile(newProfile);
+      setNeedsSetup(false);
+      setSetupChecked(true);
+      try {
+        await syncNow();
+      } catch {
+        // Offline during setup still enters app cleanly
+      }
+    },
+    [syncNow]
+  );
 
   const parsed = useMemo(() => {
     if (!syncData) {
@@ -183,6 +271,12 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       selectedDate
     );
   }, [syncData, profile.initials, selectedDate]);
+
+  // Sync local trip-report notifications whenever today's assignments or reports change
+  useEffect(() => {
+    if (needsSetup) return;
+    void syncTripReportNotifications(parsed.assignments, submittedReports, selectedDate);
+  }, [parsed.assignments, submittedReports, selectedDate, needsSetup]);
 
   const closestAssignmentIdx = useMemo(() => {
     if (parsed.assignments.length === 0) return -1;
@@ -312,31 +406,9 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     setDismissedNoteIds(next);
   }, []);
 
-  const syncNow = useCallback(async () => {
-    setSyncing(true);
-    setStatusMsg('Downloading schedule from Google...');
-    try {
-      const freshProfile = await getGuideProfile();
-      setProfile(freshProfile);
-      const fresh = await downloadSchedule();
-      setSyncData(fresh);
-      setStatusMsg(
-        `Synced ${fresh.values.length} rows & ${fresh.comments.length} comments.`
-      );
-      const flushed = await flushQueuedTripReports();
-      if (flushed > 0) {
-        await refreshReports();
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed';
-      setStatusMsg(`Sync error: ${msg}`);
-      throw err;
-    } finally {
-      setSyncing(false);
-    }
-  }, [refreshReports]);
-
   const value: ActiveTourContextValue = {
+    setupChecked,
+    needsSetup,
     profile,
     syncData,
     syncing,
@@ -361,6 +433,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     resetToToday,
     syncNow,
     reloadProfileAndCache,
+    completeInitialSetup,
     dismissNote,
     refreshReports,
   };
