@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CONFIG } from '../config';
+import { SHIP_CONTACTS } from '../data/contacts';
 import type { TourCategory } from '../data/routes';
 import { osloDateKey } from '../utils/format';
 
@@ -7,15 +8,18 @@ const STORAGE_KEY_RAW_MATRIX = 'cache:schedule_matrix_v8';
 const STORAGE_KEY_NOTES_MATRIX = 'cache:schedule_notes_v8';
 const STORAGE_KEY_COMMENTS_LIST = 'cache:schedule_comments_v8';
 const STORAGE_KEY_MANAGER_NOTES = 'cache:schedule_manager_notes_v8';
+const STORAGE_KEY_BG_COLORS = 'cache:schedule_bg_colors_v8';
+const STORAGE_KEY_FONT_LINES = 'cache:schedule_font_lines_v8';
 const STORAGE_KEY_SYNC_TIME = 'cache:schedule_synced_at';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
 
-// Staff columns in 1.6 Bookings & work schedule: BQ (68) through CZ (103, Magne)
 const STAFF_COL_START = 68;
 const STAFF_COL_END = 105;
 const MICHAL_CR_COL_INDEX = 95;
+const SHIP_COL_BB_INDEX = 53; // Column BB
 
 export type ContractType = 'full-time' | 'part-time';
+export type TourColorStatus = 'confirmed' | 'pending' | 'closed' | 'open';
 
 export interface GuideProfile {
   initials: string;
@@ -66,6 +70,9 @@ export interface GuideAssignment {
   commentsList: ThreadedComment[];
   isCharter: boolean;
   rawText: string;
+  statusColor: TourColorStatus;
+  cellBgHex: string;
+  isStrikethrough: boolean;
 }
 
 export type DutyStatusType = 'tour' | 'base' | 'day_off';
@@ -86,6 +93,8 @@ export interface SyncPayload {
   values: string[][];
   notes: string[][];
   comments: SheetCommentItem[];
+  backgrounds: string[][];
+  fontLines: string[][];
   managerNotes: string[][];
   syncedAt: string;
   fromCache: boolean;
@@ -108,17 +117,23 @@ export async function downloadSchedule(): Promise<SyncPayload> {
 
   const syncedAt = new Date().toISOString();
   const managerNotes = Array.isArray(json.managerNotes) ? (json.managerNotes as string[][]) : [];
+  const backgrounds = Array.isArray(json.backgrounds) ? (json.backgrounds as string[][]) : [];
+  const fontLines = Array.isArray(json.fontLines) ? (json.fontLines as string[][]) : [];
 
   await AsyncStorage.setItem(STORAGE_KEY_RAW_MATRIX, JSON.stringify(json.values));
   await AsyncStorage.setItem(STORAGE_KEY_NOTES_MATRIX, JSON.stringify(json.notes || []));
   await AsyncStorage.setItem(STORAGE_KEY_COMMENTS_LIST, JSON.stringify(json.comments || []));
   await AsyncStorage.setItem(STORAGE_KEY_MANAGER_NOTES, JSON.stringify(managerNotes));
+  await AsyncStorage.setItem(STORAGE_KEY_BG_COLORS, JSON.stringify(backgrounds));
+  await AsyncStorage.setItem(STORAGE_KEY_FONT_LINES, JSON.stringify(fontLines));
   await AsyncStorage.setItem(STORAGE_KEY_SYNC_TIME, syncedAt);
 
   return {
     values: json.values,
     notes: json.notes || [],
     comments: json.comments || [],
+    backgrounds,
+    fontLines,
     managerNotes,
     syncedAt,
     fromCache: false,
@@ -131,6 +146,8 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
     const rawNotes = await AsyncStorage.getItem(STORAGE_KEY_NOTES_MATRIX);
     const rawComments = await AsyncStorage.getItem(STORAGE_KEY_COMMENTS_LIST);
     const rawManagerNotes = await AsyncStorage.getItem(STORAGE_KEY_MANAGER_NOTES);
+    const rawBg = await AsyncStorage.getItem(STORAGE_KEY_BG_COLORS);
+    const rawLines = await AsyncStorage.getItem(STORAGE_KEY_FONT_LINES);
     const syncedAt = await AsyncStorage.getItem(STORAGE_KEY_SYNC_TIME);
     if (!rawVal) return null;
 
@@ -138,6 +155,8 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
       values: JSON.parse(rawVal) as string[][],
       notes: rawNotes ? (JSON.parse(rawNotes) as string[][]) : [],
       comments: rawComments ? (JSON.parse(rawComments) as SheetCommentItem[]) : [],
+      backgrounds: rawBg ? (JSON.parse(rawBg) as string[][]) : [],
+      fontLines: rawLines ? (JSON.parse(rawLines) as string[][]) : [],
       managerNotes: rawManagerNotes ? (JSON.parse(rawManagerNotes) as string[][]) : [],
       syncedAt: syncedAt || new Date().toISOString(),
       fromCache: true,
@@ -150,7 +169,9 @@ export async function getCachedSchedule(): Promise<SyncPayload | null> {
 export async function isGuideProfileConfigured(): Promise<boolean> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY_GUIDE_PROFILE);
-    return raw !== null && raw.length > 0;
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<GuideProfile>;
+    return Boolean(parsed.initials && parsed.fullName);
   } catch {
     return false;
   }
@@ -290,11 +311,11 @@ function parseTimeRangeFromText(
   return null;
 }
 
-function inferTourCategory(headerTitle: string, cellText: string): {
+function inferTourCategory(headerTitle: string, combinedText: string): {
   activity: 'snowshoe' | 'ski' | 'fatbike' | 'hiking';
   tourCategory: TourCategory;
 } {
-  const combined = `${headerTitle} ${cellText}`.toLowerCase();
+  const combined = `${headerTitle} ${combinedText}`.toLowerCase();
 
   if (
     combined.includes('coffe') ||
@@ -327,6 +348,101 @@ function inferTourCategory(headerTitle: string, cellText: string): {
   }
 
   return { activity: 'snowshoe', tourCategory: 'easy_snowshoe' };
+}
+
+function activityDisplayLabel(category: TourCategory): string {
+  switch (category) {
+    case 'hill_hike':
+      return 'Hill Hike';
+    case 'coffee_snowshoe':
+      return 'Coffee Trip';
+    case 'fatbike':
+      return 'Fatbike';
+    case 'ski':
+      return 'Ski Trip';
+    case 'easy_snowshoe':
+      return 'Snowshoe Trip';
+    default:
+      return 'Tour';
+  }
+}
+
+function detectShipInText(text: string): string | null {
+  const lower = text.toLowerCase();
+  for (const ship of SHIP_CONTACTS) {
+    if (ship.keywords.some((kw) => lower.includes(kw))) {
+      return ship.name;
+    }
+  }
+  const mein = /mein\s*schiff(?:\s*\d+)?/i.exec(text);
+  if (mein) return mein[0].replace(/\s+/g, ' ').trim();
+  const fred = /fred\s*olsen/i.exec(text);
+  if (fred) return 'Fred Olsen';
+  return null;
+}
+
+function buildDisplayTourName(params: {
+  headerTitle: string;
+  cellText: string;
+  shipName: string | null;
+  tourCategory: TourCategory;
+}): string {
+  const { headerTitle, cellText, shipName, tourCategory } = params;
+  const lowerHeader = headerTitle.toLowerCase();
+  const activityLabel = activityDisplayLabel(tourCategory);
+
+  const isGenericHeader =
+    lowerHeader.startsWith('group booking') ||
+    lowerHeader.startsWith('multyday');
+
+  if (isGenericHeader) {
+    if (shipName) {
+      return `${shipName} · ${activityLabel}`;
+    }
+    const partnerMatch = /\b(best arctic|baraka|delta of scandinavia|intrepid|nordic tours|s\.h\.tours)\b/i.exec(
+      cellText
+    );
+    if (partnerMatch) {
+      return `${partnerMatch[0]} · ${activityLabel}`;
+    }
+    return `${activityLabel} (${headerTitle})`;
+  }
+
+  if (shipName && !lowerHeader.includes(shipName.toLowerCase())) {
+    return `${headerTitle} (${shipName})`;
+  }
+
+  return headerTitle || 'Scheduled Tour';
+}
+
+function classifyCellColor(hexColor: string): TourColorStatus {
+  if (!hexColor || hexColor === '#ffffff' || hexColor.toLowerCase() === '#ffffff') {
+    return 'open';
+  }
+  const clean = hexColor.replace('#', '').trim();
+  if (clean.length !== 6) return 'open';
+
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+
+  // Red (e.g. #ff0000)
+  if (r > 190 && g < 80 && b < 80) {
+    return 'closed';
+  }
+
+  // Pure Green (e.g. #00ff00 or #00e676)
+  if (g > 170 && r < 140 && b < 140) {
+    return 'confirmed';
+  }
+
+  // Pure Yellow (e.g. #ffff00)
+  if (r > 200 && g > 200 && b < 100) {
+    return 'pending';
+  }
+
+  // Peach/cream weekend shading or default cell fill
+  return 'open';
 }
 
 function findStaffColumnIndex(headerRow: string[], profile: GuideProfile): number {
@@ -503,6 +619,8 @@ export function findUpcomingDaysOff(
   matrix: string[][],
   notes: string[][],
   comments: SheetCommentItem[],
+  backgrounds: string[][],
+  fontLines: string[][],
   profile: GuideProfile,
   fromDate: Date = new Date(),
   daysAhead: number = 14
@@ -517,6 +635,8 @@ export function findUpcomingDaysOff(
       matrix,
       notes,
       comments,
+      backgrounds,
+      fontLines,
       profile.initials,
       d
     );
@@ -543,6 +663,8 @@ export function parseGuideAssignments(
   matrix: string[][],
   notes: string[][],
   comments: SheetCommentItem[],
+  backgrounds: string[][],
+  fontLines: string[][],
   guideCode: string,
   targetDate: Date = new Date()
 ): { assignments: GuideAssignment[]; targetRowIdx: number } {
@@ -552,6 +674,9 @@ export function parseGuideAssignments(
   const headerRow = matrix[1] || [];
   const row = matrix[targetRowIdx] || [];
   const noteRow = notes[targetRowIdx] || [];
+  const bgRow = backgrounds[targetRowIdx] || [];
+  const fontLineRow = fontLines[targetRowIdx] || [];
+
   const assignments: GuideAssignment[] = [];
   const cleanCode = guideCode.trim().toLowerCase();
   const sheetRowNumber = targetRowIdx + 1;
@@ -563,6 +688,12 @@ export function parseGuideAssignments(
     const cellText = (row[c] || '').toString();
     const lowerCell = cellText.toLowerCase();
     if (!cellText || lowerCell.includes('closed') || lowerCell.includes('canceled') || lowerCell.includes('cancelled')) {
+      continue;
+    }
+
+    // Hide crossed-out (strikethrough) tours completely
+    const isStrikethrough = (fontLineRow[c] || '').toString().toLowerCase().includes('line-through');
+    if (isStrikethrough) {
       continue;
     }
 
@@ -588,13 +719,17 @@ export function parseGuideAssignments(
       commentCols1Based.push(c + 3, c + 4);
       noteCols0Based.push(c + 2, c + 3);
 
-      for (let s = c + 4; s <= Math.min(c + 6, headerRow.length - 1); s++) {
-        if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship') {
+      // Check adjacent columns up through column BB (index 53) for ship name
+      const maxShipCol = Math.max(c + 8, SHIP_COL_BB_INDEX);
+      for (let s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
+        if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship' || s === SHIP_COL_BB_INDEX) {
           const val = (row[s] || '').toString().trim();
-          shipName = val || null;
-          commentCols1Based.push(s + 1);
-          noteCols0Based.push(s);
-          break;
+          if (val) {
+            shipName = val;
+            commentCols1Based.push(s + 1);
+            noteCols0Based.push(s);
+            break;
+          }
         }
       }
     } else {
@@ -629,15 +764,27 @@ export function parseGuideAssignments(
 
     const combinedClassicNote = Array.from(new Set(classicNotes)).join(' • ');
 
-    let vehicle: string | null = null;
-    if (/minibus/i.test(cellText)) vehicle = 'Minibus';
-    else if (/caravelle/i.test(cellText)) vehicle = 'Caravelle';
+    const allNoteAndCommentText = [
+      cellText,
+      combinedClassicNote,
+      ...commentsList.map((cm) => `${cm.content} ${cm.replies.map((r) => r.content).join(' ')}`),
+    ].join(' ');
 
-    const { activity, tourCategory } = inferTourCategory(headerTitle, cellText);
+    if (!shipName) {
+      shipName = detectShipInText(allNoteAndCommentText);
+    }
+
+    let vehicle: string | null = null;
+    if (/\bminibus\b/i.test(allNoteAndCommentText)) vehicle = 'Minibus';
+    else if (/\bcaravelle\b/i.test(allNoteAndCommentText)) vehicle = 'Caravelle';
+
+    const { activity, tourCategory } = inferTourCategory(headerTitle, allNoteAndCommentText);
     const isCharter = c >= 44;
 
     const parsedTime =
-      parseTimeRangeFromText(cellText) ?? parseTimeRangeFromText(headerTitle);
+      parseTimeRangeFromText(cellText) ??
+      parseTimeRangeFromText(combinedClassicNote) ??
+      parseTimeRangeFromText(headerTitle);
 
     const defaultDur =
       tourCategory === 'hill_hike'
@@ -653,10 +800,20 @@ export function parseGuideAssignments(
       parsedTime?.endMinutes ??
       (startMinutes !== null ? startMinutes + defaultDur : null);
 
+    const displayTourName = buildDisplayTourName({
+      headerTitle,
+      cellText: allNoteAndCommentText,
+      shipName,
+      tourCategory,
+    });
+
+    const cellBg = (bgRow[c] || '').toString();
+    const statusColor = classifyCellColor(cellBg);
+
     assignments.push({
       dateString: targetDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       guideCode,
-      tourName: headerTitle || 'Scheduled Tour',
+      tourName: displayTourName,
       activity,
       tourCategory,
       guestCount,
@@ -671,8 +828,18 @@ export function parseGuideAssignments(
       commentsList,
       isCharter,
       rawText: cellText.trim(),
+      statusColor,
+      cellBgHex: cellBg,
+      isStrikethrough,
     });
   }
+
+  // Sort chronologically by start time ascending
+  assignments.sort((a, b) => {
+    const aMin = a.startMinutes ?? 9999;
+    const bMin = b.startMinutes ?? 9999;
+    return aMin - bMin;
+  });
 
   return { assignments, targetRowIdx };
 }

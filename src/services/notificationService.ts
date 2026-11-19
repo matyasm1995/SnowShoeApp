@@ -3,10 +3,14 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { osloDateKey } from '../utils/format';
-import type { GuideAssignment } from './googleSheetsService';
+import type {
+  DutyStatus,
+  GuideAssignment,
+} from './googleSheetsService';
 import type { SubmittedTripReportRecord } from './tripReportService';
 
 const ASKED_NOTIF_KEY = 'pref:asked_notifications_v1';
+const TOMORROW_DISPATCH_NOTIF_ID = 'arctic-guide-tomorrow-dispatch';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -22,7 +26,7 @@ async function ensureNotificationPermission(): Promise<boolean> {
     if (existing.status === 'granted') {
       if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync('default', {
-          name: 'Trip Reminders',
+          name: 'Guide Operations',
           importance: Notifications.AndroidImportance.HIGH,
         });
       }
@@ -39,7 +43,7 @@ async function ensureNotificationPermission(): Promise<boolean> {
     if (req.status === 'granted') {
       if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync('default', {
-          name: 'Trip Reminders',
+          name: 'Guide Operations',
           importance: Notifications.AndroidImportance.HIGH,
         });
       }
@@ -99,7 +103,6 @@ export async function syncTripReportNotifications(
         0
       );
 
-      // Only schedule if still in the future (at least 60s ahead)
       if (triggerDate.getTime() <= Date.now() + 60000) continue;
 
       await Notifications.scheduleNotificationAsync({
@@ -115,7 +118,7 @@ export async function syncTripReportNotifications(
       });
     }
   } catch {
-    // Ignore in environments where local notification scheduling is unavailable
+    // Ignore in unsupported environments
   }
 }
 
@@ -128,4 +131,68 @@ export async function cancelTripReportNotification(tourKey: string): Promise<voi
       }
     }
   } catch {}
+}
+
+export async function scheduleTomorrowDispatchNotification(params: {
+  tomorrowDate: Date;
+  tomorrowAssignments: GuideAssignment[];
+  tomorrowDuty: DutyStatus;
+}): Promise<void> {
+  try {
+    const granted = await ensureNotificationPermission();
+    if (!granted) return;
+
+    // Always cancel the previous scheduled dispatch notification first
+    try {
+      await Notifications.cancelScheduledNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
+    } catch {}
+
+    const now = new Date();
+    const target1830 = new Date(now);
+    target1830.setHours(18, 30, 0, 0);
+
+    // If 18:30 has already passed today, don't schedule for the past
+    if (target1830.getTime() <= now.getTime() + 60000) {
+      return;
+    }
+
+    const dayName = params.tomorrowDate.toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    });
+
+    let title = `Tomorrow's Schedule (${dayName})`;
+    let body = '';
+
+    if (params.tomorrowAssignments.length > 0) {
+      const tourSummaries = params.tomorrowAssignments.map((t) => {
+        const time = t.startTimeLabel ? `${t.startTimeLabel} ` : '';
+        const pax = t.guestCount > 0 ? ` (${t.guestCount} pax)` : '';
+        return `${time}${t.tourName}${pax}`;
+      });
+      body = tourSummaries.join(' · ');
+    } else if (params.tomorrowDuty.type === 'day_off') {
+      title = `Tomorrow: Day Off (${dayName})`;
+      body = 'No tours or shift assigned tomorrow. Enjoy your day off!';
+    } else {
+      title = `Tomorrow: ${params.tomorrowDuty.title} (${dayName})`;
+      body = params.tomorrowDuty.detail || 'On duty at Tromsø Outdoor tomorrow.';
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      identifier: TOMORROW_DISPATCH_NOTIF_ID,
+      content: {
+        title,
+        body,
+        data: { targetDateIso: osloDateKey(params.tomorrowDate) },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: target1830,
+      },
+    });
+  } catch {
+    // Ignore in unsupported environments
+  }
 }

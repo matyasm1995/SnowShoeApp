@@ -1,15 +1,18 @@
 module.exports = {
   expo: {
-    name: "Arctic Guide",
+    name: "TO Guides",
     slug: "arctic-snowshoe-guide",
-    version: "1.4.0",
+    version: "1.6.0",
     orientation: "portrait",
     userInterfaceStyle: "dark",
-    backgroundColor: "#000000",
+    backgroundColor: "#0B0D10",
+    icon: "./assets/icon.png",
     android: {
       package: "no.arcticguide.snowshoe",
+      versionCode: 4,
       adaptiveIcon: {
-        backgroundColor: "#000000"
+        foregroundImage: "./assets/adaptive-icon.png",
+        backgroundColor: "#0B0D10"
       },
       edgeToEdgeEnabled: true,
       permissions: [
@@ -17,7 +20,8 @@ module.exports = {
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS"
       ]
     },
     plugins: [
@@ -25,13 +29,14 @@ module.exports = {
         "expo-location",
         {
           locationAlwaysAndWhenInUsePermission:
-            "Arctic Guide uses GPS in the background to track mountain elevation and checkpoint pacing even when your phone is locked.",
+            "TO Guides uses GPS in the background to track mountain elevation and checkpoints even when locked.",
           locationWhenInUsePermission:
-            "Arctic Guide uses GPS offline to track mountain elevation and checkpoint pacing.",
+            "TO Guides uses GPS to track mountain elevation and checkpoint pacing.",
           isAndroidBackgroundLocationEnabled: true,
           isAndroidForegroundServiceEnabled: true
         }
-      ]
+      ],
+      "expo-notifications"
     ],
     extra: {
       eas: {

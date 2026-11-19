@@ -9,6 +9,7 @@ import {
   type Theme,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import {
@@ -65,7 +66,7 @@ const navigationTheme: Theme = {
     ...DarkTheme.colors,
     primary: colors.accent,
     background: colors.background,
-    card: colors.background,
+    card: colors.surface,
     text: colors.text,
     border: colors.border,
     notification: colors.danger,
@@ -96,7 +97,7 @@ function ScheduleStackNavigator() {
       screenOptions={{
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
-        headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+        headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         headerShadowVisible: false,
         contentStyle: { backgroundColor: colors.background },
         headerRight: () => <EmergencyHeaderButton />,
@@ -133,13 +134,13 @@ function MainTabsNavigator() {
       screenOptions={{
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
-        headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+        headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         headerShadowVisible: false,
         headerRight: () => <EmergencyHeaderButton />,
-        headerRightContainerStyle: { paddingRight: 12 },
+        headerRightContainerStyle: { paddingRight: 14 },
         sceneStyle: { backgroundColor: colors.background },
         tabBarStyle: {
-          backgroundColor: colors.background,
+          backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
           height: 60,
@@ -148,7 +149,7 @@ function MainTabsNavigator() {
         tabBarInactiveTintColor: colors.textSecondary,
         tabBarLabelStyle: {
           fontSize: 10,
-          fontWeight: '700',
+          fontWeight: '800',
         },
         tabBarHideOnKeyboard: true,
       }}
@@ -207,6 +208,42 @@ function AppShell() {
   const { trackedRoute } = useTracking();
   const { setupChecked, needsSetup, selectManualRoute } = useActiveTour();
 
+  useEffect(() => {
+    // 1. Notification tapped when app is open or in background
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (data?.tourKey) {
+        if (navRef.isReady()) {
+          navRef.navigate('MainTabs', {
+            screen: 'Schedule',
+            params: { screen: 'TourOverview' },
+          });
+        }
+      } else if (data?.targetDateIso) {
+        if (navRef.isReady()) {
+          navRef.navigate('MainTabs', {
+            screen: 'Schedule',
+            params: { screen: 'ScheduleHome' },
+          });
+        }
+      }
+    });
+
+    // 2. Notification tapped when app was completely killed / cold launched
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response?.notification.request.content.data?.tourKey) {
+        if (navRef.isReady()) {
+          navRef.navigate('MainTabs', {
+            screen: 'Schedule',
+            params: { screen: 'TourOverview' },
+          });
+        }
+      }
+    });
+
+    return () => sub.remove();
+  }, []);
+
   if (!setupChecked) {
     return (
       <View style={styles.splashWrap}>
@@ -235,7 +272,7 @@ function AppShell() {
           screenOptions={{
             headerStyle: { backgroundColor: colors.background },
             headerTintColor: colors.text,
-            headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+            headerTitleStyle: { fontWeight: '800', fontSize: 17 },
             headerShadowVisible: false,
             contentStyle: { backgroundColor: colors.background },
           }}
@@ -303,9 +340,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   redCrossBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: colors.danger,
     justifyContent: 'center',
     alignItems: 'center',

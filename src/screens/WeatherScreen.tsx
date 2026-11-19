@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -85,6 +85,8 @@ export function WeatherScreen() {
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
 
+  const timelineScrollRef = useRef<ScrollView>(null);
+
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), CONFIG.weather.refreshIntervalMs);
     return () => clearInterval(timer);
@@ -99,7 +101,7 @@ export function WeatherScreen() {
 
   useEffect(() => {
     let active = true;
-    void fetchWeatherAlerts(activeRoute.weatherPoint).then((items) => {
+    void fetchWeatherAlerts(activeRoute.weatherPoint, selectedDate).then((items) => {
       if (active) setWeatherAlerts(items);
     });
     if (activeRoute.category === 'hill_hike') {
@@ -129,6 +131,7 @@ export function WeatherScreen() {
   const tourStartMinutes = activeAssignment?.startMinutes ?? null;
   const tourEndMinutes = activeAssignment?.endMinutes ?? null;
 
+  // Auto-scroll timeline smoothly to tour start hour while keeping 'Now' at far-left
   useEffect(() => {
     if (timeSelectionPinned || hourlyList.length === 0) return;
 
@@ -138,6 +141,11 @@ export function WeatherScreen() {
       );
       if (idx !== -1) {
         setSelectedTimeIndex(idx);
+        // Scroll horizontally (card width 82 + gap 8 = 90dp)
+        const scrollX = Math.max(0, idx * 90 - 30);
+        setTimeout(() => {
+          timelineScrollRef.current?.scrollTo({ x: scrollX, animated: true });
+        }, 150);
         return;
       }
     }
@@ -253,7 +261,7 @@ export function WeatherScreen() {
           onRefresh={() => {
             dualForecast.reload();
             bridgeForecast.reload();
-            void fetchWeatherAlerts(activeRoute.weatherPoint).then(setWeatherAlerts);
+            void fetchWeatherAlerts(activeRoute.weatherPoint, selectedDate).then(setWeatherAlerts);
             if (activeRoute.category === 'hill_hike') {
               void fetchTromsoAvalanche(selectedDate).then(setAvalanche);
             }
@@ -293,15 +301,18 @@ export function WeatherScreen() {
         })}
       </ScrollView>
 
-      {/* 2. Active MET Weather Warnings (All locations) */}
+      {/* 2. Active MET Weather Warnings */}
       {weatherAlerts.map((alert) => (
         <View key={alert.id} style={styles.metAlertCard}>
-          <AlertTriangle color={colors.warning} size={20} />
-          <View style={styles.bridgeCopy}>
+          <AlertTriangle color={colors.warning} size={18} />
+          <View style={styles.alertCopy}>
             <Text style={styles.metAlertTitle}>
               {alert.event} ({alert.severity})
             </Text>
-            <Text style={styles.bridgeDetail}>{alert.headline}</Text>
+            {alert.validRangeLabel ? (
+              <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
+            ) : null}
+            <Text style={styles.alertDetailText}>{alert.headline}</Text>
             {alert.instruction ? (
               <Text style={styles.metAlertInst}>{alert.instruction}</Text>
             ) : null}
@@ -349,7 +360,7 @@ export function WeatherScreen() {
           style={({ pressed }) => [styles.bridgeAlert, pressed && styles.pressed]}
         >
           <AlertTriangle color={colors.danger} size={22} />
-          <View style={styles.bridgeCopy}>
+          <View style={styles.alertCopy}>
             <Text style={styles.bridgeTitle}>
               Sandnessundbrua Gusts {Math.round(bridgePeak.maxGust)} m/s ({bridgePeak.maxTime})
             </Text>
@@ -417,6 +428,7 @@ export function WeatherScreen() {
             ) : null}
           </View>
           <ScrollView
+            ref={timelineScrollRef}
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.timelineScroll}
@@ -566,7 +578,7 @@ export function WeatherScreen() {
       {/* 9. Real Freezing Elevation */}
       <View style={[sharedStyles.card, styles.freezingCard]}>
         <View style={styles.freezingLeft}>
-          <Mountain color={colors.ice} size={24} />
+          <Mountain color={colors.ice} size={22} />
           <View style={styles.freezingTextCol}>
             <Text style={styles.freezingLabel}>FREEZING ELEVATION (0°C)</Text>
             <Text style={styles.freezingDetail}>{snowlineInfo.label}</Text>
@@ -588,69 +600,71 @@ function TwilightRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  pillRow: { flexDirection: 'row', gap: 8, paddingVertical: 2 },
+  pillRow: { flexDirection: 'row', gap: 6, paddingVertical: 2 },
   pill: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 999,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
   pillSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg },
-  pillText: { color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
+  pillText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
   pillTextSelected: { color: colors.accentSoft },
   metAlertCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    backgroundColor: '#451A03',
+    gap: 8,
+    backgroundColor: colors.warningDarkBg,
     borderColor: colors.warning,
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
   },
-  metAlertTitle: { color: colors.warning, fontSize: 14, fontWeight: '800' },
-  metAlertInst: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  alertCopy: { flex: 1, gap: 2 },
+  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertRangeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  alertDetailText: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
+  metAlertInst: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
   avalancheCard: {
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
-    gap: 4,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    gap: 3,
   },
   avalancheTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   avalancheLevel: { fontSize: 13, fontWeight: '900', flex: 1 },
-  avalancheHeight: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  avalancheProblems: { color: colors.text, fontSize: 12, fontWeight: '700' },
-  avalancheMain: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
+  avalancheHeight: { color: colors.text, fontSize: 11, fontWeight: '800' },
+  avalancheProblems: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  avalancheMain: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   bridgeAlert: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#450A0A',
+    gap: 10,
+    backgroundColor: colors.dangerDarkBg,
     borderColor: colors.danger,
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
   },
-  bridgeCopy: { flex: 1, gap: 2 },
-  bridgeTitle: { color: '#FCA5A5', fontSize: 15, fontWeight: '800' },
-  bridgeDetail: { color: colors.text, fontSize: 13 },
+  bridgeTitle: { color: '#FCA5A5', fontSize: 13, fontWeight: '800' },
+  bridgeDetail: { color: colors.textSecondary, fontSize: 11 },
   dualRow: { flexDirection: 'row', gap: 8 },
   dualCol: {
     flex: 1,
-    borderRadius: 14,
-    borderWidth: 1.5,
+    borderRadius: 12,
+    borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
     gap: 2,
   },
   dualColSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg },
-  dualLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800' },
-  dualTemp: { color: colors.text, fontSize: 24, fontWeight: '800' },
-  dualMeta: { color: colors.ice, fontSize: 13, fontWeight: '700' },
-  timelineSection: { gap: 8 },
+  dualLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  dualTemp: { color: colors.text, fontSize: 22, fontWeight: '800' },
+  dualMeta: { color: colors.ice, fontSize: 12, fontWeight: '700' },
+  timelineSection: { gap: 6 },
   timelineHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -658,62 +672,63 @@ const styles = StyleSheet.create({
   },
   timelineHeader: {
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   timelineTourTag: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
-  timelineScroll: { gap: 8, paddingVertical: 4 },
+  timelineScroll: { gap: 8, paddingVertical: 2 },
   hourCard: {
-    minWidth: 82,
-    minHeight: 114,
+    minWidth: 80,
+    minHeight: 106,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 8,
+    borderRadius: 12,
+    padding: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
+    gap: 2,
   },
-  hourCardInTour: { borderColor: colors.accent, backgroundColor: '#1C1108' },
-  hourCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg, borderWidth: 2 },
+  hourCardInTour: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg },
+  hourCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg, borderWidth: 1.5 },
   hourTourBadge: { color: colors.accentSoft, fontSize: 9, fontWeight: '800' },
-  hourTime: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  hourTime: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
   hourTimeSelected: { color: colors.accentSoft },
-  hourTemp: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  hourTemp: { color: colors.text, fontSize: 17, fontWeight: '800' },
   hourWind: { color: colors.textSecondary, fontSize: 10, fontWeight: '700' },
   hourRainText: { color: colors.ice, fontSize: 10, fontWeight: '700' },
-  loading: { gap: 12 },
-  errorText: { color: colors.danger, fontSize: 14, fontWeight: '700' },
-  badge: { minHeight: 104, borderRadius: 16, borderWidth: 2, padding: 14, gap: 4 },
+  loading: { gap: 10 },
+  errorText: { color: colors.danger, fontSize: 13, fontWeight: '700' },
+  badge: { minHeight: 96, borderRadius: 14, borderWidth: 1.5, padding: 12, gap: 3 },
   badgeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  badgeTemp: { fontSize: 36, fontWeight: '800' },
+  badgeTemp: { fontSize: 32, fontWeight: '800' },
   badgeFeltCol: { alignItems: 'flex-end' },
-  badgeFeltLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800' },
-  badgeFeltVal: { fontSize: 24, fontWeight: '800' },
-  badgeLabel: { fontSize: 18, fontWeight: '800', marginTop: 2 },
-  badgeDetail: { color: colors.text, fontSize: 13 },
-  splitRow: { flexDirection: 'row', gap: 10, alignItems: 'stretch' },
+  badgeFeltLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  badgeFeltVal: { fontSize: 22, fontWeight: '800' },
+  badgeLabel: { fontSize: 16, fontWeight: '800' },
+  badgeDetail: { color: colors.text, fontSize: 12 },
+  splitRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
   splitHalf: { flex: 1 },
-  daylightCard: { padding: 12, justifyContent: 'space-between', gap: 6 },
-  daylightTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  daylightTitle: { color: colors.text, fontSize: 14, fontWeight: '800', flex: 1 },
-  daylightCountdown: { color: colors.accentSoft, fontSize: 11, fontWeight: '700' },
-  twilightRows: { gap: 4, marginTop: 4 },
+  daylightCard: { padding: 10, justifyContent: 'space-between', gap: 4 },
+  daylightTop: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  daylightTitle: { color: colors.text, fontSize: 13, fontWeight: '800', flex: 1 },
+  daylightCountdown: { color: colors.accentSoft, fontSize: 10, fontWeight: '700' },
+  twilightRows: { gap: 3, marginTop: 2 },
   twilightRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  twilightLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
-  twilightValue: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  twilightLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  twilightValue: { color: colors.text, fontSize: 12, fontWeight: '800' },
   freezingCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
+    padding: 10,
   },
-  freezingLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  freezingTextCol: { flex: 1, gap: 2 },
-  freezingLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800' },
-  freezingDetail: { color: colors.textSecondary, fontSize: 12, lineHeight: 16 },
-  freezingValue: { color: colors.ice, fontSize: 22, fontWeight: '800' },
+  freezingLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  freezingTextCol: { flex: 1, gap: 1 },
+  freezingLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  freezingDetail: { color: colors.textSecondary, fontSize: 11, lineHeight: 15 },
+  freezingValue: { color: colors.ice, fontSize: 20, fontWeight: '800' },
   pressed: { opacity: 0.72 },
 });

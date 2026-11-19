@@ -2,9 +2,9 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,9 +25,9 @@ import {
   Navigation,
   Phone,
   Plus,
+  Ship,
   Trash2,
   Users,
-  Wind,
   X,
 } from 'lucide-react-native';
 
@@ -148,9 +148,7 @@ export function TourOverviewScreen() {
     activeRoute,
     selectedDate,
     tourKey,
-    managerNotes,
     submittedReports,
-    dismissNote,
     refreshReports,
     setHillHikeMountain,
     selectManualRoute,
@@ -173,6 +171,7 @@ export function TourOverviewScreen() {
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
 
   const [editingKit, setEditingKit] = useState(false);
   const [newItemText, setNewItemText] = useState('');
@@ -181,7 +180,7 @@ export function TourOverviewScreen() {
 
   useEffect(() => {
     let active = true;
-    void fetchWeatherAlerts(activeRoute.weatherPoint).then((items) => {
+    void fetchWeatherAlerts(activeRoute.weatherPoint, selectedDate).then((items) => {
       if (active) setWeatherAlerts(items);
     });
     if (isHillHike) {
@@ -278,13 +277,6 @@ export function TourOverviewScreen() {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }, [activeAssignment, activeRoute]);
 
-  const transportLabel = activeAssignment
-    ? [activeAssignment.vehicle, activeAssignment.shipName].filter(Boolean).join(' · ') ||
-      'Check dispatch'
-    : activeRoute.driveMinutesEachWay === 0
-      ? 'Starts at Shop'
-      : 'Vehicle TBD';
-
   const expectedPax = activeAssignment?.guestCount ?? 0;
   const currentRosterPax = roster.totalGuestsCount;
 
@@ -326,36 +318,7 @@ export function TourOverviewScreen() {
 
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.content}>
-      {/* 1. Manager's Noticeboard */}
-      {managerNotes.map((mn) => (
-        <View
-          key={mn.id}
-          style={[
-            styles.managerNoteCard,
-            mn.level === 'critical' && styles.managerNoteCritical,
-            mn.level === 'warning' && styles.managerNoteWarning,
-            mn.level === 'info' && styles.managerNoteInfo,
-          ]}
-        >
-          <View style={styles.managerNoteBody}>
-            <Text style={styles.managerNoteLevel}>
-              MANAGER {mn.level.toUpperCase()}
-            </Text>
-            <Text style={styles.managerNoteText}>{mn.note}</Text>
-          </View>
-          {mn.level !== 'critical' ? (
-            <Pressable
-              hitSlop={10}
-              onPress={() => void dismissNote(mn.id)}
-              style={styles.dismissBtn}
-            >
-              <X color={colors.textSecondary} size={18} />
-            </Pressable>
-          ) : null}
-        </View>
-      ))}
-
-      {/* 2. Tour Briefing Card */}
+      {/* 1. Tour Briefing Card */}
       <View style={styles.briefCard}>
         <View style={styles.briefTopRow}>
           <Text style={styles.categoryTag}>
@@ -376,13 +339,23 @@ export function TourOverviewScreen() {
         </Text>
 
         <View style={styles.infoRow}>
+          {activeAssignment?.shipName ? (
+            <View style={styles.infoChipShip}>
+              <Ship color={colors.ice} size={15} />
+              <Text style={styles.infoChipShipText}>{activeAssignment.shipName}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.infoChip}>
-            <Bus color={colors.accent} size={16} />
-            <Text style={styles.infoChipText}>{transportLabel}</Text>
+            <Bus color={colors.accent} size={15} />
+            <Text style={styles.infoChipText}>
+              {activeAssignment?.vehicle || (activeRoute.driveMinutesEachWay === 0 ? 'Starts at Shop' : 'Vehicle TBD')}
+            </Text>
           </View>
+
           {concreteReturnClock ? (
             <View style={styles.infoChip}>
-              <Clock color={colors.accent} size={16} />
+              <Clock color={colors.accent} size={15} />
               <Text style={styles.infoChipText}>Back at car {concreteReturnClock}</Text>
             </View>
           ) : null}
@@ -398,22 +371,26 @@ export function TourOverviewScreen() {
         ) : null}
 
         {activeAssignment && activeAssignment.commentsList.length > 0 ? (
-          <View style={styles.noteBox}>
+          <Pressable
+            onPress={() => setShowCommentsModal(true)}
+            style={({ pressed }) => [styles.noteBox, pressed && styles.pressed]}
+          >
             <View style={styles.commentHeader}>
               <MessageSquare color={colors.accent} size={14} />
               <Text style={styles.noteLabel}>OFFICE COMMENTS</Text>
+              <Text style={styles.readFullHint}>Tap for full →</Text>
             </View>
             {activeAssignment.commentsList.map((c, idx) => (
-              <Text key={idx} style={styles.noteText} numberOfLines={4}>
+              <Text key={idx} style={styles.noteText} numberOfLines={3}>
                 <Text style={{ fontWeight: '800' }}>{c.author}: </Text>
                 {c.content}
               </Text>
             ))}
-          </View>
+          </Pressable>
         ) : null}
       </View>
 
-      {/* 3. Auto-Pinned Ship & Tour Contacts */}
+      {/* 2. Auto-Pinned Ship & Tour Contacts */}
       {pinnedContacts.length > 0 ? (
         <View style={styles.contactsCard}>
           <Text style={styles.contactsHeader}>AUTO-PINNED TOUR CONTACTS</Text>
@@ -448,7 +425,7 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 4. Post-Trip Report Button */}
+      {/* 3. Post-Trip Report Button */}
       {activeAssignment ? (
         <Pressable
           onPress={() => setShowReportModal(true)}
@@ -494,7 +471,7 @@ export function TourOverviewScreen() {
               {reportRecord
                 ? reportRecord.queuedOffline
                   ? 'Saved offline · Will sync when online · Tap to edit'
-                  : `Submitted (${reportRecord.attendedPax} joined) · Tap to resubmit`
+                  : `Submitted (${reportRecord.attendedPax} joined) · Tap to edit`
                 : 'Pre-filled with guide, tour, date & attended pax'}
             </Text>
           </View>
@@ -505,7 +482,7 @@ export function TourOverviewScreen() {
         </Pressable>
       ) : null}
 
-      {/* 5. Morning Mountain Picker (Hill Hikes Only) */}
+      {/* 4. Morning Mountain Picker (Hill Hikes Only) */}
       {isHillHike ? (
         <View style={[sharedStyles.card, styles.mountainPickerCard]}>
           <View style={styles.pickerHeader}>
@@ -580,7 +557,7 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 6. Avalanche Level & MetAlerts & Bridge */}
+      {/* 5. Avalanche Level & MetAlerts & Bridge */}
       {isHillHike && avalanche && avColors ? (
         <View
           style={[
@@ -613,11 +590,14 @@ export function TourOverviewScreen() {
       {weatherAlerts.map((alert) => (
         <View key={alert.id} style={styles.metAlertCard}>
           <AlertTriangle color={colors.warning} size={20} />
-          <View style={styles.bridgeCopy}>
+          <View style={styles.alertCopy}>
             <Text style={styles.metAlertTitle}>
               {alert.event} ({alert.severity})
             </Text>
-            <Text style={styles.bridgeDetail} numberOfLines={2}>
+            {alert.validRangeLabel ? (
+              <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
+            ) : null}
+            <Text style={styles.alertDetailText} numberOfLines={2}>
               {alert.headline}
             </Text>
           </View>
@@ -630,7 +610,7 @@ export function TourOverviewScreen() {
           style={({ pressed }) => [styles.bridgeAlert, pressed && styles.pressed]}
         >
           <AlertTriangle color={colors.danger} size={22} />
-          <View style={styles.bridgeCopy}>
+          <View style={styles.alertCopy}>
             <Text style={styles.bridgeTitle}>
               Kvaløya Bridge Gusts {Math.round(bridgePeak.maxGustMs)} m/s ({bridgePeak.peakTime})
             </Text>
@@ -641,60 +621,26 @@ export function TourOverviewScreen() {
         </Pressable>
       ) : null}
 
-      {/* 7. Guests & Basic Weather Quick Tiles */}
-      <View style={styles.tilesRow}>
-        <Pressable
-          onPress={openRosterTab}
-          style={({ pressed }) => [touchTarget, styles.actionTile, pressed && styles.pressed]}
-        >
-          <View style={styles.tileHeader}>
-            <Users color={colors.accent} size={20} />
-            <ChevronRight color={colors.textSecondary} size={18} />
+      {/* 6. Guests Tile (Wide & Clean) */}
+      <Pressable
+        onPress={openRosterTab}
+        style={({ pressed }) => [touchTarget, styles.guestTileWide, pressed && styles.pressed]}
+      >
+        <View style={styles.guestTileLeft}>
+          <Users color={colors.accent} size={22} />
+          <View>
+            <Text style={styles.guestTileTitle}>
+              {expectedPax > 0 ? `${expectedPax} Guests Expected` : 'Open Bookings'}
+            </Text>
+            <Text style={styles.guestTileSub}>
+              {currentRosterPax} registered on scratchpad · Tap to open Roster
+            </Text>
           </View>
-          <Text style={styles.tileBigValue}>
-            {expectedPax > 0 ? `${expectedPax} pax` : `${currentRosterPax} saved`}
-          </Text>
-          <Text style={styles.tileSub}>
-            {expectedPax > 0
-              ? `${currentRosterPax}/${expectedPax} on roster`
-              : 'Tap to open Roster'}
-          </Text>
-        </Pressable>
+        </View>
+        <ChevronRight color={colors.textSecondary} size={20} />
+      </Pressable>
 
-        <Pressable
-          onPress={() => navigation.navigate('DetailedWeather')}
-          style={({ pressed }) => [touchTarget, styles.actionTile, pressed && styles.pressed]}
-        >
-          <View style={styles.tileHeader}>
-            {primaryWeather ? (
-              <WeatherIcon symbolCode={primaryWeather.symbolCode} size={24} />
-            ) : (
-              <Wind color={colors.ice} size={20} />
-            )}
-            <ChevronRight color={colors.textSecondary} size={18} />
-          </View>
-          {dualForecast.loading && !primaryWeather ? (
-            <ActivityIndicator color={colors.accent} size="small" />
-          ) : (
-            <>
-              <Text style={styles.tileBigValue}>
-                {primaryWeather ? formatTemperature(primaryWeather.airTemperatureC) : '—'}
-              </Text>
-              <Text style={styles.tileSub} numberOfLines={2}>
-                {primaryWeather
-                  ? `Wind ${primaryWeather.windSpeedMs.toFixed(1)} m/s ${
-                      primaryWeather.windFromDirectionDeg !== null
-                        ? windCardinal(primaryWeather.windFromDirectionDeg)
-                        : ''
-                    } · Detailed`
-                  : 'Detailed Weather'}
-              </Text>
-            </>
-          )}
-        </Pressable>
-      </View>
-
-      {/* 8. Basic Weather Breakdown Strip */}
+      {/* 7. Full Tour Window Weather Card (With Full Forecast button) */}
       <Pressable
         onPress={() => navigation.navigate('DetailedWeather')}
         style={({ pressed }) => [sharedStyles.card, styles.weatherStrip, pressed && styles.pressed]}
@@ -726,11 +672,14 @@ export function TourOverviewScreen() {
             </View>
           </View>
         ) : (
-          <Text style={styles.singleWeatherLine}>
-            {bottomWeather
-              ? `${formatTemperature(bottomWeather.airTemperatureC)} · Wind ${bottomWeather.windSpeedMs.toFixed(1)} m/s`
-              : 'Loading forecast…'}
-          </Text>
+          <View style={styles.singleWeatherRow}>
+            <WeatherIcon symbolCode={bottomWeather?.symbolCode ?? null} size={28} />
+            <Text style={styles.singleWeatherLine}>
+              {bottomWeather
+                ? `${formatTemperature(bottomWeather.airTemperatureC)} · Wind ${bottomWeather.windSpeedMs.toFixed(1)} m/s`
+                : 'Loading forecast…'}
+            </Text>
+          </View>
         )}
 
         <View style={styles.weatherStripFooter}>
@@ -745,7 +694,7 @@ export function TourOverviewScreen() {
         </View>
       </Pressable>
 
-      {/* 9. GPS Tracking Button */}
+      {/* 8. GPS Tracking Button */}
       {activeRoute.hasActiveTracking ? (
         <Pressable
           onPress={() => navigation.navigate('Tracking')}
@@ -762,7 +711,7 @@ export function TourOverviewScreen() {
         </Pressable>
       ) : null}
 
-      {/* 10. Custom & Editable Equipment Checklist */}
+      {/* 9. Custom & Editable Equipment Checklist */}
       <View style={styles.checklistHeader}>
         <Text style={sharedStyles.sectionTitle}>{checklist.activeTemplate.title}</Text>
         <View style={styles.checklistActions}>
@@ -849,7 +798,7 @@ export function TourOverviewScreen() {
             >
               <View style={styles.checkInner}>
                 <View style={[styles.box, checked && styles.boxChecked]}>
-                  {checked ? <Check color={colors.background} size={22} strokeWidth={3} /> : null}
+                  {checked ? <Check color={colors.background} size={20} strokeWidth={3} /> : null}
                 </View>
                 <Text style={[styles.checkLabel, checked && styles.checkLabelDone]}>
                   {item.label}
@@ -861,12 +810,60 @@ export function TourOverviewScreen() {
                 onPress={() => checklist.removeItem(item.id)}
                 style={styles.deleteItemBtn}
               >
-                <Trash2 color={colors.danger} size={18} />
+                <Trash2 color={colors.danger} size={16} />
               </Pressable>
             ) : null}
           </View>
         );
       })}
+
+      {/* Full Office Comments Modal */}
+      <Modal
+        visible={showCommentsModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowCommentsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Full Office Comments</Text>
+              <Pressable
+                onPress={() => setShowCommentsModal(false)}
+                style={styles.modalClose}
+              >
+                <X color={colors.text} size={22} />
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.modalBody}>
+              {activeAssignment?.rawText ? (
+                <View style={styles.fullCommentCard}>
+                  <Text style={styles.fullCommentAuthor}>Schedule Cell</Text>
+                  <Text style={styles.fullCommentText} selectable>
+                    {activeAssignment.rawText}
+                  </Text>
+                </View>
+              ) : null}
+              {activeAssignment?.commentsList.map((c, idx) => (
+                <View key={idx} style={styles.fullCommentCard}>
+                  <Text style={styles.fullCommentAuthor}>{c.author}</Text>
+                  <Text style={styles.fullCommentText} selectable>
+                    {c.content}
+                  </Text>
+                  {c.replies.map((r, rIdx) => (
+                    <View key={rIdx} style={styles.fullReplyBox}>
+                      <Text style={styles.fullReplyAuthor}>{r.author || 'Reply'}:</Text>
+                      <Text style={styles.fullCommentText} selectable>
+                        {r.content}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Post-Trip Report Modal */}
       {activeAssignment ? (
@@ -894,28 +891,13 @@ export function TourOverviewScreen() {
 }
 
 const styles = StyleSheet.create({
-  managerNoteCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
-    gap: 10,
-  },
-  managerNoteCritical: { backgroundColor: '#450A0A', borderColor: colors.danger },
-  managerNoteWarning: { backgroundColor: '#451A03', borderColor: colors.warning },
-  managerNoteInfo: { backgroundColor: '#082F49', borderColor: colors.ice },
-  managerNoteBody: { flex: 1, gap: 2 },
-  managerNoteLevel: { color: colors.textSecondary, fontSize: 10, fontWeight: '900' },
-  managerNoteText: { color: colors.text, fontSize: 14, fontWeight: '700', lineHeight: 20 },
-  dismissBtn: { padding: 4 },
   briefCard: {
     backgroundColor: colors.surface,
-    borderColor: colors.accent,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    padding: 16,
-    gap: 10,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
   },
   briefTopRow: {
     flexDirection: 'row',
@@ -924,7 +906,7 @@ const styles = StyleSheet.create({
   },
   categoryTag: {
     color: colors.accent,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.6,
   },
@@ -932,46 +914,59 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDarkBg,
     borderColor: colors.accent,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
-  timePillText: { color: colors.accentSoft, fontSize: 13, fontWeight: '800' },
-  tourTitle: { color: colors.text, fontSize: 22, fontWeight: '800' },
-  infoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  timePillText: { color: colors.accentSoft, fontSize: 12, fontWeight: '800' },
+  tourTitle: { color: colors.text, fontSize: 20, fontWeight: '800' },
+  infoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#09090B',
+    gap: 5,
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  infoChipText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  infoChipShip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  infoChipShipText: { color: colors.ice, fontSize: 12, fontWeight: '800' },
+  returnNote: { color: colors.textSecondary, fontSize: 12, lineHeight: 18 },
+  noteBox: {
+    backgroundColor: '#0E1116',
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    padding: 8,
+    gap: 3,
   },
-  infoChipText: { color: colors.text, fontSize: 13, fontWeight: '700' },
-  returnNote: { color: colors.textSecondary, fontSize: 13, lineHeight: 19 },
-  noteBox: {
-    backgroundColor: '#09090B',
+  commentHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  noteLabel: { color: colors.accentSoft, fontSize: 10, fontWeight: '800', flex: 1 },
+  readFullHint: { color: colors.accent, fontSize: 11, fontWeight: '800' },
+  noteText: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  contactsCard: {
+    backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: 12,
     padding: 10,
-    gap: 4,
+    gap: 6,
   },
-  commentHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  noteLabel: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
-  noteText: { color: colors.text, fontSize: 14, lineHeight: 20 },
-  contactsCard: {
-    backgroundColor: colors.surface,
-    borderColor: colors.ice,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-    gap: 8,
-  },
-  contactsHeader: { color: colors.ice, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  contactsHeader: { color: colors.ice, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -979,253 +974,292 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   contactInfo: { flex: 1 },
-  contactName: { color: colors.text, fontSize: 15, fontWeight: '800' },
-  contactPhone: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  contactName: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  contactPhone: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
   contactButtons: { flexDirection: 'row', gap: 6 },
   callPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
     backgroundColor: colors.accent,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
-  callPillText: { color: colors.background, fontSize: 13, fontWeight: '800' },
+  callPillText: { color: colors.background, fontSize: 12, fontWeight: '800' },
   callPillSecondary: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#09090B',
+    backgroundColor: '#0E1116',
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
-  callPillSecondaryText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  callPillSecondaryText: { color: colors.text, fontSize: 11, fontWeight: '700' },
   reportBtn: {
     flexDirection: 'row',
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1.5,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    gap: 12,
+    gap: 10,
   },
-  reportBtnDefault: { backgroundColor: colors.surface, borderColor: colors.accent },
+  reportBtnDefault: { backgroundColor: colors.surface, borderColor: colors.border },
   reportBtnNeeded: { backgroundColor: colors.warning, borderColor: colors.warning },
-  reportBtnDone: { backgroundColor: '#022C22', borderColor: colors.success },
+  reportBtnDone: { backgroundColor: colors.successDarkBg, borderColor: colors.success },
   reportCopy: { flex: 1 },
-  reportTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  reportSub: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
-  mountainPickerCard: { gap: 10, padding: 14 },
-  pickerHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pickerTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  reportTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  reportSub: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  mountainPickerCard: { gap: 8, padding: 12 },
+  pickerHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pickerTitle: { color: colors.textSecondary, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   pickerRow: { flexDirection: 'row', gap: 8 },
   mountainOption: {
     flex: 1,
-    backgroundColor: '#09090B',
+    backgroundColor: '#0E1116',
     borderColor: colors.border,
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
     gap: 2,
   },
-  mountainOptionActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  mountainName: { color: colors.text, fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  mountainOptionActive: { backgroundColor: colors.accentDarkBg, borderColor: colors.accent },
+  mountainName: { color: colors.text, fontSize: 13, fontWeight: '800', textAlign: 'center' },
   mountainWind: { color: colors.textSecondary, fontSize: 11, fontWeight: '700', textAlign: 'center' },
-  mountainTextActive: { color: colors.background },
-  avalancheCard: { borderWidth: 1.5, borderRadius: 14, padding: 12, gap: 4 },
+  mountainTextActive: { color: colors.accentSoft },
+  avalancheCard: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 3 },
   avalancheTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  avalancheLevel: { fontSize: 14, fontWeight: '900' },
-  avalancheHeight: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  avalancheProblems: { color: colors.text, fontSize: 12, fontWeight: '700' },
-  avalancheMain: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
+  avalancheLevel: { fontSize: 13, fontWeight: '900' },
+  avalancheHeight: { color: colors.text, fontSize: 11, fontWeight: '800' },
+  avalancheProblems: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  avalancheMain: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   metAlertCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#451A03',
+    gap: 8,
+    backgroundColor: colors.warningDarkBg,
     borderColor: colors.warning,
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
   },
-  metAlertTitle: { color: colors.warning, fontSize: 14, fontWeight: '800' },
+  alertCopy: { flex: 1, gap: 2 },
+  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertRangeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  alertDetailText: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   bridgeAlert: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#450A0A',
+    gap: 10,
+    backgroundColor: colors.dangerDarkBg,
     borderColor: colors.danger,
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 14,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
   },
-  bridgeCopy: { flex: 1, gap: 2 },
-  bridgeTitle: { color: '#FCA5A5', fontSize: 15, fontWeight: '800' },
-  bridgeDetail: { color: colors.text, fontSize: 13, lineHeight: 18 },
-  tilesRow: { flexDirection: 'row', gap: 10 },
-  actionTile: {
-    flex: 1,
+  bridgeTitle: { color: '#FCA5A5', fontSize: 14, fontWeight: '800' },
+  bridgeDetail: { color: colors.textSecondary, fontSize: 11 },
+  guestTileWide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 16,
-    padding: 14,
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    minHeight: 108,
-    gap: 6,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  tileHeader: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  tileBigValue: { color: colors.text, fontSize: 22, fontWeight: '800' },
-  tileSub: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
-  weatherStrip: { gap: 8 },
+  guestTileLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  guestTileTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  guestTileSub: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  weatherStrip: { gap: 6, padding: 12 },
   weatherStripTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  sectionMiniLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: '800' },
-  linkText: { color: colors.accent, fontSize: 13, fontWeight: '800' },
-  dualMiniRow: { flexDirection: 'row', gap: 10 },
+  sectionMiniLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  linkText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
+  dualMiniRow: { flexDirection: 'row', gap: 8 },
   dualMiniCol: {
     flex: 1,
-    backgroundColor: '#09090B',
-    borderRadius: 10,
-    padding: 10,
+    backgroundColor: '#0E1116',
+    borderRadius: 8,
+    padding: 8,
     gap: 2,
   },
-  dualMiniTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
-  dualMiniVal: { color: colors.text, fontSize: 15, fontWeight: '800' },
-  singleWeatherLine: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  dualMiniTitle: { color: colors.textSecondary, fontSize: 10, fontWeight: '700' },
+  dualMiniVal: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  singleWeatherRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  singleWeatherLine: { color: colors.text, fontSize: 15, fontWeight: '800' },
   weatherStripFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  feltPill: { fontSize: 12, fontWeight: '800' },
-  daylightMini: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  feltPill: { fontSize: 11, fontWeight: '800' },
+  daylightMini: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
   trackingBtn: {
     flexDirection: 'row',
     backgroundColor: colors.accent,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
   },
   trackingBtnCopy: { flex: 1 },
-  trackingBtnTitle: { color: colors.background, fontSize: 17, fontWeight: '800' },
-  trackingBtnSub: { color: colors.background, fontSize: 12, fontWeight: '700', opacity: 0.85 },
+  trackingBtnTitle: { color: colors.background, fontSize: 15, fontWeight: '800' },
+  trackingBtnSub: { color: colors.background, fontSize: 11, fontWeight: '700', opacity: 0.85 },
   checklistHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 6,
+    alignItems: 'baseline',
+    marginTop: 4,
   },
-  checklistActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  checklistCount: { color: colors.accent, fontSize: 14, fontWeight: '800' },
+  checklistActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checklistCount: { color: colors.accent, fontSize: 13, fontWeight: '800' },
   editKitBtn: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  editKitText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  editKitText: { color: colors.text, fontSize: 11, fontWeight: '700' },
   kitManagerBox: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-    gap: 10,
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
   },
   kitManagerLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
   kitPillsRow: { gap: 6 },
   kitPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: '#09090B',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#0E1116',
     borderColor: colors.border,
     borderWidth: 1,
   },
-  kitPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  kitPillText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
-  kitPillTextActive: { color: colors.background, fontWeight: '800' },
+  kitPillActive: { backgroundColor: colors.accentDarkBg, borderColor: colors.accent },
+  kitPillText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  kitPillTextActive: { color: colors.accentSoft, fontWeight: '800' },
   kitPillAdd: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderColor: colors.accent,
     borderWidth: 1,
   },
-  kitPillAddText: { color: colors.accent, fontSize: 13, fontWeight: '800' },
-  inlineInputRow: { flexDirection: 'row', gap: 8 },
+  kitPillAddText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
+  inlineInputRow: { flexDirection: 'row', gap: 6 },
   inlineInput: {
     flex: 1,
-    minHeight: 44,
-    backgroundColor: '#09090B',
+    minHeight: 40,
+    backgroundColor: '#0E1116',
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
+    borderRadius: 8,
+    paddingHorizontal: 8,
     color: colors.text,
-    fontSize: 14,
+    fontSize: 13,
   },
   inlineAddBtn: {
-    minWidth: 52,
-    minHeight: 44,
+    minWidth: 44,
+    minHeight: 40,
     backgroundColor: colors.accent,
-    borderRadius: 10,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
-  inlineAddText: { color: colors.background, fontSize: 13, fontWeight: '800' },
-  checkRowWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inlineAddText: { color: colors.background, fontSize: 12, fontWeight: '800' },
+  checkRowWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   checkRow: {
     flex: 1,
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
-  checkInner: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12 },
+  checkInner: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10 },
   box: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 2,
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    borderWidth: 1.5,
     borderColor: colors.textSecondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   boxChecked: { backgroundColor: colors.accent, borderColor: colors.accent },
-  checkLabel: { color: colors.text, fontSize: 17, flex: 1 },
+  checkLabel: { color: colors.text, fontSize: 15, flex: 1 },
   checkLabelDone: { color: colors.textSecondary },
   deleteItemBtn: {
-    width: 44,
-    height: 52,
-    borderRadius: 12,
+    width: 38,
+    height: 44,
+    borderRadius: 10,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  modalTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  modalClose: { width: 34, height: 34, justifyContent: 'center', alignItems: 'center' },
+  modalBody: { padding: 14, gap: 10, paddingBottom: 28 },
+  fullCommentCard: {
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  fullCommentAuthor: { color: colors.accentSoft, fontSize: 12, fontWeight: '800' },
+  fullCommentText: { color: colors.text, fontSize: 14, lineHeight: 21 },
+  fullReplyBox: {
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    paddingTop: 6,
+    marginTop: 4,
+    gap: 2,
+  },
+  fullReplyAuthor: { color: colors.ice, fontSize: 11, fontWeight: '800' },
   pressed: { opacity: 0.75 },
 });

@@ -1,33 +1,43 @@
 import { StyleSheet } from 'react-native';
 
 export const colors = {
-  background: '#000000',
-  surface: '#121212',
-  border: '#27272A',
+  // Softer dark-slate background & card surfaces (less eye-straining in low light)
+  background: '#0B0D10',
+  surface: '#15181E',
+  surfaceElevated: '#1D2128',
+  border: '#2A2F3A',
+  borderSubtle: '#1F242D',
   text: '#FFFFFF',
-  textSecondary: '#A1A1AA',
-  /** Tromsø Outdoor orange primary brand accent */
+  textSecondary: '#94A3B8',
+  textMuted: '#64748B',
+
+  // Tromsø Outdoor primary orange accent
   accent: '#F97316',
   accentSoft: '#FB923C',
-  accentDarkBg: '#431407',
-  /** Ice blue reserved strictly for cold/snow/freezing weather indicators */
+  accentDarkBg: '#2E1508',
+
+  // Ice blue strictly for cold / snow / water data
   ice: '#38BDF8',
-  iceDarkBg: '#082F49',
+  iceDarkBg: '#08283B',
+
+  // Status highlights
   success: '#4ADE80',
+  successDarkBg: '#052E16',
   warning: '#FACC15',
+  warningDarkBg: '#3A2004',
   danger: '#EF4444',
+  dangerDarkBg: '#3B0D0D',
 } as const;
 
 export const spacing = {
-  screen: 16,
-  card: 16,
-  gap: 12,
+  screen: 14,
+  card: 14,
+  gap: 10,
 } as const;
 
-/** Glove-friendly minimum for every button, toggle, and clickable card. */
 export const touchTarget = {
-  minHeight: 56,
-  minWidth: 56,
+  minHeight: 52,
+  minWidth: 52,
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
 };
@@ -46,23 +56,25 @@ export const sharedStyles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 14,
     padding: spacing.card,
   },
   sectionTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '700',
-    marginTop: 8,
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginTop: 4,
+    textTransform: 'uppercase',
   },
   body: {
     color: colors.text,
-    fontSize: 18,
-    lineHeight: 26,
+    fontSize: 16,
+    lineHeight: 24,
   },
   secondary: {
     color: colors.textSecondary,
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 14,
+    lineHeight: 20,
   },
 });

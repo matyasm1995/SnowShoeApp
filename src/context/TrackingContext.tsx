@@ -157,9 +157,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
             BACKGROUND_LOCATION_TASK
           );
           if (mounted) setBackgroundServiceActive(isBgRunning);
-          if (!isBgRunning) {
-            await attachForegroundWatcher();
-          }
+          await attachForegroundWatcher();
         } catch {
           try {
             await attachForegroundWatcher();
@@ -263,7 +261,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
         if (trackMatch.distanceAlongTrackKm >= targetDist - 0.2) reached = true;
       } else if (trackedRoute.trackingMode === 'elevation') {
-        // Top / turnaround gates keep a -10m buffer; intermediate gates require exact elevation
         const bufferM = gate.isTurnaround ? 10 : 0;
         if (currentElev !== null && currentElev >= gate.targetElevationMeters - bufferM) {
           reached = true;
@@ -288,6 +285,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     async (route: ActivityRoute) => {
       setGpsError(null);
 
+      // Check foreground permission first without prompting if already granted
       let fg = await Location.getForegroundPermissionsAsync();
       if (fg.status !== 'granted') {
         fg = await Location.requestForegroundPermissionsAsync();
@@ -307,6 +305,16 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setAltitudeOffset(TROMSO_DEFAULT_GEOID_OFFSET_M);
       setTrackingActive(true);
 
+      // 1. Immediately start foreground watcher so GPS updates arrive with zero delay
+      try {
+        await attachForegroundWatcher();
+      } catch (err) {
+        setTrackingActive(false);
+        setGpsError(err instanceof Error ? err.message : 'Unable to start GPS.');
+        return;
+      }
+
+      // 2. Read quick position & auto-zero if near parking
       try {
         const initial =
           (await Location.getLastKnownPositionAsync()) ??
@@ -340,7 +348,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
 
-      let bgStarted = false;
+      // 3. Start background location service safely non-blocking
       try {
         let bg = await Location.getBackgroundPermissionsAsync();
         if (bg.status !== 'granted') {
@@ -357,24 +365,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
             distanceInterval: 6,
             foregroundService: {
               notificationTitle: `Tracking ${route.shortLabel}`,
-              notificationBody: 'Arctic Guide is monitoring elevation and checkpoints.',
+              notificationBody: 'TO Guides is monitoring elevation and checkpoints.',
               notificationColor: colors.accent,
             },
           });
-          bgStarted = true;
+          setBackgroundServiceActive(true);
         }
       } catch {
-        bgStarted = false;
-      }
-
-      setBackgroundServiceActive(bgStarted);
-      try {
-        await attachForegroundWatcher();
-      } catch (err) {
-        if (!bgStarted) {
-          setTrackingActive(false);
-          setGpsError(err instanceof Error ? err.message : 'Unable to start GPS.');
-        }
+        setBackgroundServiceActive(false);
       }
     },
     [attachForegroundWatcher]

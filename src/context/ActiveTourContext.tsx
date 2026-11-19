@@ -37,7 +37,10 @@ import {
   parseManagerNotes,
   type ManagerNoteItem,
 } from '../services/managerNotesService';
-import { syncTripReportNotifications } from '../services/notificationService';
+import {
+  scheduleTomorrowDispatchNotification,
+  syncTripReportNotifications,
+} from '../services/notificationService';
 import {
   flushQueuedTripReports,
   loadSubmittedReports,
@@ -267,6 +270,8 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       syncData.values,
       syncData.notes,
       syncData.comments,
+      syncData.backgrounds,
+      syncData.fontLines,
       profile.initials,
       selectedDate
     );
@@ -277,6 +282,33 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     if (needsSetup) return;
     void syncTripReportNotifications(parsed.assignments, submittedReports, selectedDate);
   }, [parsed.assignments, submittedReports, selectedDate, needsSetup]);
+
+  // Schedule daily 18:30 Tomorrow Dispatch notification
+  useEffect(() => {
+    if (needsSetup || !syncData) return;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const { assignments: tmrAssignments, targetRowIdx: tmrRow } = parseGuideAssignments(
+      syncData.values,
+      syncData.notes,
+      syncData.comments,
+      syncData.backgrounds,
+      syncData.fontLines,
+      profile.initials,
+      tomorrow
+    );
+    const tmrDuty = calculateDutyStatus(
+      syncData.values,
+      tmrRow,
+      profile,
+      tmrAssignments.length
+    );
+    void scheduleTomorrowDispatchNotification({
+      tomorrowDate: tomorrow,
+      tomorrowAssignments: tmrAssignments,
+      tomorrowDuty: tmrDuty,
+    });
+  }, [syncData, profile, needsSetup]);
 
   const closestAssignmentIdx = useMemo(() => {
     if (parsed.assignments.length === 0) return -1;
@@ -318,6 +350,8 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       syncData.values,
       syncData.notes,
       syncData.comments,
+      syncData.backgrounds,
+      syncData.fontLines,
       profile,
       new Date(),
       14
