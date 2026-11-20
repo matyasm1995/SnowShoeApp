@@ -8,7 +8,7 @@ module.exports = {
     backgroundColor: "#0B0D10",
     icon: "./assets/icon.png",
     android: {
-      package: "no.arcticguide.snowshoe",
+      package: "com.toguides.app",
       versionCode: 4,
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",

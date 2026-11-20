@@ -184,7 +184,6 @@ export function ScheduleScreen() {
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
 
-  // 1-Tap direct Post-Trip report from Schedule screen
   const [directReport, setDirectReport] = useState<{
     tour: GuideAssignment;
     tourKey: string;
@@ -269,7 +268,6 @@ export function ScheduleScreen() {
 
   const bridgeAlert = bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
 
-  // Unsubmitted report reminder (ONLY on confirmed or booked-pending tours; never on open or closed)
   const pendingReportData = useMemo(() => {
     const nowMin = getOsloMinutes(new Date());
     for (let idx = 0; idx < assignments.length; idx++) {
@@ -291,7 +289,6 @@ export function ScheduleScreen() {
     return null;
   }, [assignments, submittedReports, dateKey, todayKey]);
 
-  // Next 7 Days glance
   const next7Days = useMemo(() => {
     if (!syncData) return [];
     const base = new Date();
@@ -352,6 +349,11 @@ export function ScheduleScreen() {
       const msg = err instanceof Error ? err.message : 'Sync failed';
       Alert.alert('Sync Failed', msg);
     }
+  };
+
+  const openWeatherForRoute = (routeId: string) => {
+    selectManualRoute(routeId);
+    navigation.navigate('DetailedWeather');
   };
 
   const openBridgeDetails = () => {
@@ -503,7 +505,9 @@ export function ScheduleScreen() {
             >
               {dutyStatus.title}
             </Text>
-            <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
+            {dutyStatus.type !== 'day_off' ? (
+              <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
+            ) : null}
           </View>
         </View>
       ) : null}
@@ -524,7 +528,7 @@ export function ScheduleScreen() {
         </View>
       ))}
 
-      {/* 7. YOUR TOURS (Front & Center!) */}
+      {/* 7. YOUR TOURS */}
       {assignments.length > 0 ? (
         <Text style={sharedStyles.sectionTitle}>Today's Tours ({assignments.length})</Text>
       ) : null}
@@ -557,7 +561,12 @@ export function ScheduleScreen() {
               </Text>
               <View style={styles.badgesRow}>
                 {statusBadge ? (
-                  <View style={[styles.statusColorBadge, { backgroundColor: statusBadge.bg, borderColor: statusBadge.color }]}>
+                  <View
+                    style={[
+                      styles.statusColorBadge,
+                      { backgroundColor: statusBadge.bg, borderColor: statusBadge.color },
+                    ]}
+                  >
                     <Text style={[styles.statusColorText, { color: statusBadge.color }]}>
                       {statusBadge.label}
                     </Text>
@@ -615,11 +624,14 @@ export function ScheduleScreen() {
         );
       })}
 
-      {/* 8. Tour-Driven Weather Card */}
+      {/* 8. Tour-Driven Weather Card (Clickable to DetailedWeather) */}
       <Text style={sharedStyles.sectionTitle}>Weather Conditions</Text>
       {homeCategory === 'hill_hike' ? (
         <View style={[sharedStyles.card, styles.weatherCheckCard]}>
-          <View style={styles.checkHeader}>
+          <Pressable
+            onPress={() => openWeatherForRoute(activeRoute.id)}
+            style={({ pressed }) => [styles.checkHeader, pressed && styles.pressed]}
+          >
             <Wind color={colors.ice} size={18} />
             <Text style={styles.checkTitle}>HILL HIKE · SUMMIT WIND CHECK</Text>
             {avalanche && avColors ? (
@@ -633,12 +645,17 @@ export function ScheduleScreen() {
                   AVALANCHE {avalanche.dangerLevel}/5
                 </Text>
               </View>
-            ) : null}
-          </View>
+            ) : (
+              <Text style={styles.weatherLinkHint}>Forecast →</Text>
+            )}
+          </Pressable>
 
           <View style={styles.summitRow}>
-            <View style={styles.summitBox}>
-              <Text style={styles.summitName}>Tverrfjellet (524m)</Text>
+            <Pressable
+              onPress={() => openWeatherForRoute('tverrfjellet')}
+              style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
+            >
+              <Text style={styles.summitName}>Tverrfjellet (524m) →</Text>
               <Text style={styles.summitWind}>
                 {tverrSummary.peakWindMs > 0
                   ? `${tverrSummary.peakWindMs.toFixed(1)} m/s ${
@@ -652,10 +669,13 @@ export function ScheduleScreen() {
                   ? formatTemperature(tverrSummary.repHour.airTemperatureC)
                   : '—'}
               </Text>
-            </View>
+            </Pressable>
 
-            <View style={styles.summitBox}>
-              <Text style={styles.summitName}>Rundfjellet (472m)</Text>
+            <Pressable
+              onPress={() => openWeatherForRoute('rundfjellet')}
+              style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
+            >
+              <Text style={styles.summitName}>Rundfjellet (472m) →</Text>
               <Text style={styles.summitWind}>
                 {rundSummary.peakWindMs > 0
                   ? `${rundSummary.peakWindMs.toFixed(1)} m/s ${
@@ -669,7 +689,7 @@ export function ScheduleScreen() {
                   ? formatTemperature(rundSummary.repHour.airTemperatureC)
                   : '—'}
               </Text>
-            </View>
+            </Pressable>
           </View>
 
           <Pressable
@@ -689,22 +709,28 @@ export function ScheduleScreen() {
         </View>
       ) : homeCategory === 'coffee_snowshoe' ? (
         <View style={[sharedStyles.card, styles.weatherCheckCard]}>
-          <View style={styles.checkHeader}>
-            <WeatherIcon symbolCode={coffeeSummary.repHour?.symbolCode ?? null} size={22} />
-            <Text style={styles.checkTitle}>MALANGEN · TOVE’S TRADISJONSMAT</Text>
-          </View>
-          <View style={styles.singleSummaryRow}>
-            <Text style={styles.singleSummaryTemp}>
-              {coffeeSummary.repHour
-                ? formatTemperature(coffeeSummary.repHour.airTemperatureC)
-                : '—'}
-            </Text>
-            <Text style={styles.singleSummaryWind}>
-              Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
-              {coffeeSummary.dirDeg !== null ? windCardinal(coffeeSummary.dirDeg) : ''} · Gust{' '}
-              {Math.round(coffeeSummary.peakGustMs)} m/s
-            </Text>
-          </View>
+          <Pressable
+            onPress={() => openWeatherForRoute('coffee-malangen')}
+            style={({ pressed }) => [styles.weatherTapArea, pressed && styles.pressed]}
+          >
+            <View style={styles.checkHeader}>
+              <WeatherIcon symbolCode={coffeeSummary.repHour?.symbolCode ?? null} size={22} />
+              <Text style={styles.checkTitle}>MALANGEN · TOVE’S TRADISJONSMAT</Text>
+              <Text style={styles.weatherLinkHint}>Forecast →</Text>
+            </View>
+            <View style={styles.singleSummaryRow}>
+              <Text style={styles.singleSummaryTemp}>
+                {coffeeSummary.repHour
+                  ? formatTemperature(coffeeSummary.repHour.airTemperatureC)
+                  : '—'}
+              </Text>
+              <Text style={styles.singleSummaryWind}>
+                Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
+                {coffeeSummary.dirDeg !== null ? windCardinal(coffeeSummary.dirDeg) : ''} · Gust{' '}
+                {Math.round(coffeeSummary.peakGustMs)} m/s
+              </Text>
+            </View>
+          </Pressable>
 
           <Pressable
             onPress={openBridgeDetails}
@@ -722,10 +748,18 @@ export function ScheduleScreen() {
           </Pressable>
         </View>
       ) : (
-        <View style={[sharedStyles.card, styles.weatherCheckCard]}>
+        <Pressable
+          onPress={() => openWeatherForRoute('snowshoe-charlottenlund')}
+          style={({ pressed }) => [
+            sharedStyles.card,
+            styles.weatherCheckCard,
+            pressed && styles.pressed,
+          ]}
+        >
           <View style={styles.checkHeader}>
             <WeatherIcon symbolCode={charlSummary.repHour?.symbolCode ?? null} size={22} />
             <Text style={styles.checkTitle}>CHARLOTTENLUND · TRAIL WEATHER</Text>
+            <Text style={styles.weatherLinkHint}>Forecast →</Text>
           </View>
           <View style={styles.singleSummaryRow}>
             <Text style={styles.singleSummaryTemp}>
@@ -739,7 +773,7 @@ export function ScheduleScreen() {
               {Math.round(charlSummary.peakGustMs)} m/s
             </Text>
           </View>
-        </View>
+        </Pressable>
       )}
 
       {/* 9. Next 7 Days Simple Schedule Toggle */}
@@ -1073,8 +1107,10 @@ const styles = StyleSheet.create({
   reportNeededText: { color: colors.warning, fontSize: 11, fontWeight: '800' },
   openHint: { color: colors.accent, fontSize: 13, fontWeight: '800', marginLeft: 'auto' },
   weatherCheckCard: { gap: 10, padding: 12 },
+  weatherTapArea: { gap: 10 },
   checkHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   checkTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, flex: 1 },
+  weatherLinkHint: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   avBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   avBadgeText: { fontSize: 10, fontWeight: '800' },
   summitRow: { flexDirection: 'row', gap: 8 },

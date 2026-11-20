@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +31,21 @@ function toDegreesMinutes(val: number, posHemi: string, negHemi: string): string
   return `${deg}° ${min.toFixed(3)}' ${hemi}`;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Location request timed out.')), ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export function EmergencyHelpScreen() {
   const { activeRoute, activeAssignment } = useActiveTour();
   const [loading, setLoading] = useState(true);
@@ -43,58 +58,147 @@ export function EmergencyHelpScreen() {
     updatedAt: Date;
   } | null>(null);
 
-  const fetchPosition = useCallback(async () => {
-    setLoading(true);
+  const mountedRef = useRef(true);
+  const watcherRef = useRef<Location.LocationSubscription | null>(null);
+  const requestIdRef = useRef(0);
+
+  const applyLocation = useCallback((loc: Location.LocationObject) => {
+    if (!mountedRef.current) return;
+    setCoords({
+      lat: loc.coords.latitude,
+      lon: loc.coords.longitude,
+      altM:
+        loc.coords.altitude !== null
+          ? Math.round(loc.coords.altitude - 32)
+          : null,
+      accuracyM:
+        loc.coords.accuracy !== null ? Math.round(loc.coords.accuracy) : null,
+      updatedAt: new Date(loc.timestamp ?? Date.now()),
+    });
     setError(null);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setError('Location permission denied. Enable GPS in Android Settings.');
-        setLoading(false);
-        return;
-      }
+  }, []);
 
-      try {
-        const last = await Location.getLastKnownPositionAsync();
-        if (last) {
-          setCoords({
-            lat: last.coords.latitude,
-            lon: last.coords.longitude,
-            altM:
-              last.coords.altitude !== null
-                ? Math.round(last.coords.altitude - 32)
-                : null,
-            accuracyM:
-              last.coords.accuracy !== null ? Math.round(last.coords.accuracy) : null,
-            updatedAt: new Date(last.timestamp ?? Date.now()),
-          });
-        }
-      } catch {}
-
-      const fresh = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.BestForNavigation,
-      });
-      setCoords({
-        lat: fresh.coords.latitude,
-        lon: fresh.coords.longitude,
-        altM:
-          fresh.coords.altitude !== null
-            ? Math.round(fresh.coords.altitude - 32)
-            : null,
-        accuracyM:
-          fresh.coords.accuracy !== null ? Math.round(fresh.coords.accuracy) : null,
-        updatedAt: new Date(fresh.timestamp ?? Date.now()),
-      });
-    } catch {
-      setError('Could not get live GPS fix. Move to open sky and tap Refresh.');
-    } finally {
-      setLoading(false);
+  const stopWatcher = useCallback(() => {
+    if (watcherRef.current) {
+      watcherRef.current.remove();
+      watcherRef.current = null;
     }
   }, []);
 
+  const fetchPosition = useCallback(async () => {
+    const reqId = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        if (mountedRef.current && reqId === requestIdRef.current) {
+          setError('Device GPS / Location Services are turned off. Enable Location in Android settings.');
+          setLoading(false);
+        }
+        return;
+      }
+
+      let perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        perm = await Location.requestForegroundPermissionsAsync();
+      }
+      if (perm.status !== 'granted') {
+        if (mountedRef.current && reqId === requestIdRef.current) {
+          setError('Location permission denied. Enable GPS in Android Settings.');
+          setLoading(false);
+        }
+        return;
+      }
+
+      stopWatcher();
+
+      let gotLiveFix = false;
+      let hasAnyFix = false;
+
+      // 1. Show last known position immediately if available
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last && mountedRef.current && reqId === requestIdRef.current) {
+          hasAnyFix = true;
+          applyLocation(last);
+        }
+      } catch {}
+
+      // 2. Attach live watcher (same reliable mechanism used by Tracking)
+      try {
+        watcherRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 3000,
+            distanceInterval: 3,
+          },
+          (loc) => {
+            if (!mountedRef.current || reqId !== requestIdRef.current) return;
+            gotLiveFix = true;
+            hasAnyFix = true;
+            applyLocation(loc);
+            setLoading(false);
+          }
+        );
+      } catch {}
+
+      // 3. Bounded one-shot fallback if watcher hasn't delivered yet
+      if (!gotLiveFix) {
+        try {
+          const fresh = await withTimeout(
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+            8000
+          );
+          if (mountedRef.current && reqId === requestIdRef.current && !gotLiveFix) {
+            hasAnyFix = true;
+            applyLocation(fresh);
+          }
+        } catch {
+          if (!gotLiveFix) {
+            try {
+              const balanced = await withTimeout(
+                Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+                6000
+              );
+              if (mountedRef.current && reqId === requestIdRef.current && !gotLiveFix) {
+                hasAnyFix = true;
+                applyLocation(balanced);
+              }
+            } catch (err) {
+              if (mountedRef.current && reqId === requestIdRef.current && !hasAnyFix) {
+                const detail = err instanceof Error ? err.message : '';
+                setError(
+                  detail
+                    ? `Could not get live GPS fix (${detail}). Move to open sky and tap Refresh.`
+                    : 'Could not get live GPS fix. Move to open sky and tap Refresh.'
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (mountedRef.current && reqId === requestIdRef.current) {
+        const detail = err instanceof Error ? err.message : 'Unable to read GPS.';
+        setError(detail);
+      }
+    } finally {
+      if (mountedRef.current && reqId === requestIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [applyLocation, stopWatcher]);
+
   useEffect(() => {
+    mountedRef.current = true;
     void fetchPosition();
-  }, [fetchPosition]);
+    return () => {
+      mountedRef.current = false;
+      stopWatcher();
+    };
+  }, [fetchPosition, stopWatcher]);
 
   const dial = async (phone: string) => {
     const cleaned = phone.replace(/\s+/g, '');

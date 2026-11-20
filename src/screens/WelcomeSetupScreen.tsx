@@ -1,3 +1,4 @@
+import * as Location from 'expo-location';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -41,6 +42,15 @@ export function WelcomeSetupScreen() {
 
     setSaving(true);
     try {
+      try {
+        const perm = await Location.getForegroundPermissionsAsync();
+        if (perm.status !== 'granted') {
+          await Location.requestForegroundPermissionsAsync();
+        }
+      } catch {
+        // Non-blocking: SOS and Tracking will re-check if needed
+      }
+
       await completeInitialSetup({
         initials: cleanInitials,
         fullName: cleanName,
@@ -202,6 +212,10 @@ export function WelcomeSetupScreen() {
           </View>
         </View>
 
+        <Text style={styles.permissionNote}>
+          Location access (&ldquo;While using the app&rdquo;) will be requested for 113 Emergency GPS and trail checkpoints.
+        </Text>
+
         <Pressable
           onPress={() => void handleContinue()}
           disabled={saving}
@@ -299,12 +313,19 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 8,
   },
+  permissionNote: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 17,
+    paddingHorizontal: 8,
+  },
   submitBtn: {
     flexDirection: 'row',
     gap: 10,
     backgroundColor: colors.accent,
     borderRadius: 16,
-    marginTop: 4,
+    marginTop: 2,
   },
   submitText: {
     color: colors.background,
