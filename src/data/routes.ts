@@ -42,6 +42,7 @@ export interface ActivityRoute {
   defaultDurationMinutes: number;
   driveMinutesEachWay: number;
   backAtParkingBeforeEndMinutes?: number;
+  meetingPoint?: string;
   returnNote: string;
   usesBridgeWarning: boolean;
   hasActiveTracking: boolean;
@@ -262,6 +263,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     defaultDurationMinutes: 300,
     driveMinutesEachWay: 45,
     backAtParkingBeforeEndMinutes: 45,
+    meetingPoint: 'Tromsø Outdoor Shop',
     returnNote:
       '45 min drive each way. Gate 2 at the top (524 m / +2h 00m) is your reminder to head down and reach the car ≥45 min before tour end.',
     usesBridgeWarning: true,
@@ -301,6 +303,7 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     defaultDurationMinutes: 300,
     driveMinutesEachWay: 30,
     backAtParkingBeforeEndMinutes: 30,
+    meetingPoint: 'Tromsø Outdoor Shop',
     returnNote:
       '30 min drive each way. Watch Gate 1 (250 m / +1h 15m) & Gate 2 (400 m / +1h 45m); start descending from 472 m by +2h 15m.',
     usesBridgeWarning: true,
@@ -337,14 +340,135 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     track: rundfjelletTrack,
   },
   {
+    id: 'coffee-malangen',
+    name: 'Coffee Trip 09:00 (4.5h)',
+    shortLabel: 'Coffee Hike',
+    area: "Tove's Tradisjonsmat (Malangen)",
+    category: 'coffee_snowshoe',
+    checklistId: 'standard',
+    defaultDurationMinutes: 270,
+    driveMinutesEachWay: 60,
+    backAtParkingBeforeEndMinutes: 90,
+    meetingPoint: 'Tromsø Outdoor Shop',
+    returnNote:
+      "1h drive each way. Be back from the hike at Tove's Tradisjonsmat 1h 30m before tour end so guests have time for coffee before the drive back.",
+    usesBridgeWarning: true,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: { latitude: 69.526290, longitude: 18.863026, elevationMeters: 15 },
+    weatherPoint: { latitude: 69.526100, longitude: 18.852700, elevationMeters: 35 },
+    summit: null,
+    ascentBearingDeg: 270,
+    totalDistanceKm: coffeeDist,
+    gates: [],
+    track: coffeeTrack,
+  },
+  {
+    id: 'snowshoe-charlottenlund',
+    name: 'Snowshoe Tromsøya 10:00 (2.5h)',
+    shortLabel: 'Easy Snowshoe',
+    area: 'Charlottenlund',
+    category: 'easy_snowshoe',
+    checklistId: 'standard',
+    defaultDurationMinutes: 150,
+    driveMinutesEachWay: 15,
+    backAtParkingBeforeEndMinutes: 20,
+    meetingPoint: 'Tromsø Outdoor Shop',
+    returnNote:
+      'Set trail at Charlottenlund. Finish walking ~20 min before tour end for the short drive back to Tromsø Outdoor.',
+    usesBridgeWarning: false,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    weatherPoint: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    summit: null,
+    ascentBearingDeg: 350,
+    totalDistanceKm: 2.5,
+    gates: [],
+    track: [],
+  },
+  {
+    id: 'hg-snowshoe',
+    name: 'HG Snowshoe 14:15',
+    shortLabel: 'HG Snowshoe',
+    area: 'Charlottenlund · Hurtigruten / Havila',
+    category: 'easy_snowshoe',
+    checklistId: 'hg_snowshoe',
+    defaultDurationMinutes: 165,
+    driveMinutesEachWay: 15,
+    backAtParkingBeforeEndMinutes: 20,
+    meetingPoint: 'Prostneset',
+    returnNote:
+      'Meet & end at Prostneset. Bring headlamps, matches, firewood, firepan & toboggans.',
+    usesBridgeWarning: false,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    weatherPoint: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    summit: null,
+    ascentBearingDeg: 350,
+    totalDistanceKm: 2.5,
+    gates: [],
+    track: [],
+  },
+  {
+    id: 'ski-charlottenlund',
+    name: 'XC Ski 09:00 / 13:30 (3h)',
+    shortLabel: 'XC Ski',
+    area: 'Charlottenlund',
+    category: 'ski',
+    checklistId: 'standard',
+    defaultDurationMinutes: 180,
+    driveMinutesEachWay: 15,
+    backAtParkingBeforeEndMinutes: 20,
+    meetingPoint: 'Tromsø Outdoor Shop',
+    returnNote:
+      'Charlottenlund ski loop. Wrap up ~20 min before tour end to pack skis and drive back to Tromsø Outdoor.',
+    usesBridgeWarning: false,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    weatherPoint: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    summit: null,
+    ascentBearingDeg: 350,
+    totalDistanceKm: 4.0,
+    gates: [],
+    track: [],
+  },
+  {
+    id: 'hg-ski',
+    name: 'HG Ski 14:15',
+    shortLabel: 'HG Ski',
+    area: 'Charlottenlund · Hurtigruten / Havila',
+    category: 'ski',
+    checklistId: 'hg_ski',
+    defaultDurationMinutes: 165,
+    driveMinutesEachWay: 15,
+    backAtParkingBeforeEndMinutes: 20,
+    meetingPoint: 'Prostneset',
+    returnNote:
+      'Meet & end at Prostneset. Bring skis & ski shoes for guests.',
+    usesBridgeWarning: false,
+    hasActiveTracking: false,
+    trackingMode: 'none',
+    trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    weatherPoint: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
+    summit: null,
+    ascentBearingDeg: 350,
+    totalDistanceKm: 4.0,
+    gates: [],
+    track: [],
+  },
+  {
     id: 'fatbike-tromsoya',
-    name: 'Fatbiking in Tromsø (3h)',
+    name: 'Fatbike (3h)',
     shortLabel: 'Fatbike',
     area: 'Tromsøya North',
     category: 'fatbike',
-    checklistId: 'standard',
+    checklistId: 'fatbike',
     defaultDurationMinutes: 180,
     driveMinutesEachWay: 0,
+    meetingPoint: 'Tromsø Outdoor Shop',
     returnNote:
       'Starts at Tromsø Outdoor shop (0 min drive). Reach the northern turning point in +1h 30m so you are back on time.',
     usesBridgeWarning: false,
@@ -379,63 +503,18 @@ export const ROUTE_CATALOG: readonly ActivityRoute[] = [
     track: fatbikeTrack,
   },
   {
-    id: 'coffee-malangen',
-    name: 'Coffee Trip · Easy Snowshoe (4.5h)',
-    shortLabel: 'Coffee Hike',
-    area: "Tove's Tradisjonsmat (Malangen)",
-    category: 'coffee_snowshoe',
-    checklistId: 'standard',
-    defaultDurationMinutes: 270,
-    driveMinutesEachWay: 60,
-    backAtParkingBeforeEndMinutes: 90,
-    returnNote:
-      "1h drive each way. Be back from the hike at Tove's Tradisjonsmat 1h 30m before tour end so guests have time for coffee before the drive back.",
-    usesBridgeWarning: true,
-    hasActiveTracking: false,
-    trackingMode: 'none',
-    trailhead: { latitude: 69.526290, longitude: 18.863026, elevationMeters: 15 },
-    weatherPoint: { latitude: 69.526100, longitude: 18.852700, elevationMeters: 35 },
-    summit: null,
-    ascentBearingDeg: 270,
-    totalDistanceKm: coffeeDist,
-    gates: [],
-    track: coffeeTrack,
-  },
-  {
-    id: 'snowshoe-charlottenlund',
-    name: 'Easy Snowshoe W 103 (2.5h)',
-    shortLabel: 'Easy Snowshoe',
-    area: 'Charlottenlund',
-    category: 'easy_snowshoe',
-    checklistId: 'standard',
-    defaultDurationMinutes: 150,
-    driveMinutesEachWay: 15,
-    backAtParkingBeforeEndMinutes: 20,
-    returnNote:
-      'Set trail at Charlottenlund (no GPS tracking needed). Finish walking ~20 min before tour end for the short drive back to Tromsø Outdoor.',
-    usesBridgeWarning: false,
-    hasActiveTracking: false,
-    trackingMode: 'none',
-    trailhead: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
-    weatherPoint: { latitude: 69.664, longitude: 18.940, elevationMeters: 100 },
-    summit: null,
-    ascentBearingDeg: 350,
-    totalDistanceKm: 2.5,
-    gates: [],
-    track: [],
-  },
-  {
-    id: 'ski-charlottenlund',
-    name: 'Beginner Ski Trip W 101 (3h)',
-    shortLabel: 'Ski Trip',
-    area: 'Charlottenlund',
+    id: 'cruise-ski',
+    name: 'Cruise Ski Trip (Charter)',
+    shortLabel: 'Cruise Ski',
+    area: 'Finnmarken / Midnatsol / Trollfjord',
     category: 'ski',
-    checklistId: 'standard',
+    checklistId: 'hg_ski',
     defaultDurationMinutes: 180,
     driveMinutesEachWay: 15,
     backAtParkingBeforeEndMinutes: 20,
+    meetingPoint: 'Check tour cell / note (Kai 8, Kai 21, Prostneset)',
     returnNote:
-      'Charlottenlund ski loop (no GPS tracking needed). Wrap up ~20 min before tour end to pack skis and drive back to Tromsø Outdoor.',
+      'Charter ski trip for cruise ships. Check cell/note for Kai 8, Kai 21, or Prostneset meeting point. Bring skis & shoes.',
     usesBridgeWarning: false,
     hasActiveTracking: false,
     trackingMode: 'none',
@@ -480,13 +559,37 @@ export function matchRouteForText(
   combinedText: string,
   defaultMountainId: string
 ): ActivityRoute {
+  const lower = combinedText.toLowerCase();
+
   if (category === 'bridge') return getRouteById('sandnessundbrua');
   if (category === 'coffee_snowshoe') return getRouteById('coffee-malangen');
   if (category === 'fatbike') return getRouteById('fatbike-tromsoya');
-  if (category === 'ski') return getRouteById('ski-charlottenlund');
-  if (category === 'easy_snowshoe') return getRouteById('snowshoe-charlottenlund');
 
-  const lower = combinedText.toLowerCase();
+  const isShip =
+    lower.includes('14:15') ||
+    lower.includes('14.15') ||
+    lower.includes('hg') ||
+    lower.includes('hurtigruten') ||
+    lower.includes('havila');
+
+  const isCruiseCharter =
+    lower.includes('finnmarken') ||
+    lower.includes('midnatsol') ||
+    lower.includes('trollfjord') ||
+    lower.includes('kai 8') ||
+    lower.includes('kai 21');
+
+  if (category === 'ski') {
+    if (isCruiseCharter) return getRouteById('cruise-ski');
+    if (isShip) return getRouteById('hg-ski');
+    return getRouteById('ski-charlottenlund');
+  }
+
+  if (category === 'easy_snowshoe') {
+    if (isShip) return getRouteById('hg-snowshoe');
+    return getRouteById('snowshoe-charlottenlund');
+  }
+
   if (lower.includes('rundfjell')) return getRouteById('rundfjellet');
   if (lower.includes('tverrfjell')) return getRouteById('tverrfjellet');
 

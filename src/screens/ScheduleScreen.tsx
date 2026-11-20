@@ -179,7 +179,7 @@ export function ScheduleScreen() {
   } = useActiveTour();
 
   const [showAllRoutes, setShowAllRoutes] = useState(false);
-  const [showNextWeek, setShowNextWeek] = useState(false);
+  const [showNextMonth, setShowNextMonth] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
@@ -289,7 +289,7 @@ export function ScheduleScreen() {
     return null;
   }, [assignments, submittedReports, dateKey, todayKey]);
 
-  const next7Days = useMemo(() => {
+  const upcoming30Days = useMemo(() => {
     if (!syncData) return [];
     const base = new Date();
     const list: {
@@ -299,7 +299,7 @@ export function ScheduleScreen() {
       kind: 'tour' | 'off' | 'base';
     }[] = [];
 
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 30; i++) {
       const d = new Date(base);
       d.setDate(d.getDate() + i);
       const { assignments: dayTours, targetRowIdx } = parseGuideAssignments(
@@ -311,6 +311,8 @@ export function ScheduleScreen() {
         profile.initials,
         d
       );
+      if (targetRowIdx === -1 && i > 0) break;
+
       const status = calculateDutyStatus(syncData.values, targetRowIdx, profile, dayTours.length);
       const label =
         i === 0
@@ -335,6 +337,11 @@ export function ScheduleScreen() {
 
     return list;
   }, [syncData, profile]);
+
+  const companyTrips = useMemo(
+    () => ROUTE_CATALOG.filter((r) => r.category !== 'bridge'),
+    []
+  );
 
   const highestNoteLevel = useMemo(() => {
     if (managerNotes.some((n) => n.level === 'critical')) return 'critical';
@@ -776,57 +783,65 @@ export function ScheduleScreen() {
         </Pressable>
       )}
 
-      {/* 9. Next 7 Days Simple Schedule Toggle */}
+      {/* 9. Scrollable Multi-Week Schedule Overview */}
       <Text style={sharedStyles.sectionTitle}>Overview</Text>
-      {next7Days.length > 0 ? (
+      {upcoming30Days.length > 0 ? (
         <>
           <Pressable
-            onPress={() => setShowNextWeek((v) => !v)}
+            onPress={() => setShowNextMonth((v) => !v)}
             style={({ pressed }) => [touchTarget, styles.browseToggle, pressed && styles.pressed]}
           >
-            <Text style={styles.browseToggleText}>Next 7 Days Schedule</Text>
-            {showNextWeek ? (
+            <Text style={styles.browseToggleText}>
+              Upcoming Schedule ({upcoming30Days.length} Days)
+            </Text>
+            {showNextMonth ? (
               <ChevronUp color={colors.textSecondary} size={20} />
             ) : (
               <ChevronDown color={colors.textSecondary} size={20} />
             )}
           </Pressable>
 
-          {showNextWeek ? (
+          {showNextMonth ? (
             <View style={styles.weekCard}>
-              {next7Days.map((item) => (
-                <Pressable
-                  key={item.dayLabel}
-                  onPress={() => {
-                    resetToToday();
-                    if (item.offset > 0) shiftDate(item.offset);
-                  }}
-                  style={styles.weekRow}
-                >
-                  <Text style={styles.weekDay}>{item.dayLabel}</Text>
-                  <Text
-                    style={[
-                      styles.weekStatus,
-                      item.kind === 'off' && { color: colors.success },
-                      item.kind === 'tour' && { color: colors.accentSoft, fontWeight: '800' },
-                    ]}
-                    numberOfLines={1}
+              <ScrollView
+                style={styles.weekScroll}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                {upcoming30Days.map((item) => (
+                  <Pressable
+                    key={item.dayLabel}
+                    onPress={() => {
+                      resetToToday();
+                      if (item.offset > 0) shiftDate(item.offset);
+                    }}
+                    style={styles.weekRow}
                   >
-                    {item.statusText}
-                  </Text>
-                </Pressable>
-              ))}
+                    <Text style={styles.weekDay}>{item.dayLabel}</Text>
+                    <Text
+                      style={[
+                        styles.weekStatus,
+                        item.kind === 'off' && { color: colors.success },
+                        item.kind === 'tour' && { color: colors.accentSoft, fontWeight: '800' },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.statusText}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
           ) : null}
         </>
       ) : null}
 
-      {/* 10. Browse All Routes Fallback */}
+      {/* 10. Browse All Company Trips */}
       <Pressable
         onPress={() => setShowAllRoutes((v) => !v)}
         style={({ pressed }) => [touchTarget, styles.browseToggle, pressed && styles.pressed]}
       >
-        <Text style={styles.browseToggleText}>Browse All Company Routes</Text>
+        <Text style={styles.browseToggleText}>Browse All Company Trips</Text>
         {showAllRoutes ? (
           <ChevronUp color={colors.textSecondary} size={20} />
         ) : (
@@ -836,7 +851,7 @@ export function ScheduleScreen() {
 
       {showAllRoutes ? (
         <View style={styles.routesList}>
-          {ROUTE_CATALOG.map((route) => (
+          {companyTrips.map((route) => (
             <Pressable
               key={route.id}
               onPress={() => openManualRoute(route)}
@@ -1160,6 +1175,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 12,
     overflow: 'hidden',
+  },
+  weekScroll: {
+    maxHeight: 280,
   },
   weekRow: {
     flexDirection: 'row',

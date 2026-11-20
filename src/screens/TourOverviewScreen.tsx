@@ -2,7 +2,6 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   Linking,
   Modal,
   Pressable,
@@ -20,6 +19,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  MapPin,
   MessageSquare,
   Mountain,
   Navigation,
@@ -146,6 +146,7 @@ export function TourOverviewScreen() {
     profile,
     activeAssignment,
     activeRoute,
+    isManualTripView,
     selectedDate,
     tourKey,
     submittedReports,
@@ -279,13 +280,14 @@ export function TourOverviewScreen() {
 
   const expectedPax = activeAssignment?.guestCount ?? 0;
   const currentRosterPax = roster.totalGuestsCount;
+  const displayMeetingPoint = activeAssignment?.meetingPoint ?? activeRoute.meetingPoint ?? null;
 
   const dialPhone = async (phone: string) => {
     const cleaned = phone.replace(/\s+/g, '');
     try {
       await Linking.openURL(`tel:${cleaned}`);
     } catch {
-      Alert.alert('Call Failed', `Dial ${phone} manually.`);
+      // Fallback handled by OS
     }
   };
 
@@ -322,7 +324,11 @@ export function TourOverviewScreen() {
       <View style={styles.briefCard}>
         <View style={styles.briefTopRow}>
           <Text style={styles.categoryTag}>
-            {activeAssignment?.isCharter ? 'CHARTER' : activeRoute.area.toUpperCase()}
+            {isManualTripView
+              ? `TRIP INFO · ${activeRoute.area.toUpperCase()}`
+              : activeAssignment?.isCharter
+                ? 'CHARTER'
+                : activeRoute.area.toUpperCase()}
           </Text>
           {activeAssignment?.startTimeLabel ? (
             <View style={styles.timePill}>
@@ -346,12 +352,22 @@ export function TourOverviewScreen() {
             </View>
           ) : null}
 
-          <View style={styles.infoChip}>
-            <Bus color={colors.accent} size={15} />
-            <Text style={styles.infoChipText}>
-              {activeAssignment?.vehicle || (activeRoute.driveMinutesEachWay === 0 ? 'Starts at Shop' : 'Vehicle TBD')}
-            </Text>
-          </View>
+          {displayMeetingPoint ? (
+            <View style={styles.infoChip}>
+              <MapPin color={colors.ice} size={15} />
+              <Text style={styles.infoChipText}>{displayMeetingPoint}</Text>
+            </View>
+          ) : null}
+
+          {!isManualTripView ? (
+            <View style={styles.infoChip}>
+              <Bus color={colors.accent} size={15} />
+              <Text style={styles.infoChipText}>
+                {activeAssignment?.vehicle ||
+                  (activeRoute.driveMinutesEachWay === 0 ? 'Starts at Shop' : 'Vehicle TBD')}
+              </Text>
+            </View>
+          ) : null}
 
           {concreteReturnClock ? (
             <View style={styles.infoChip}>
@@ -425,7 +441,7 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 3. Post-Trip Report Button */}
+      {/* 3. Post-Trip Report Button (only for live scheduled assignments) */}
       {activeAssignment ? (
         <Pressable
           onPress={() => setShowReportModal(true)}
@@ -621,26 +637,28 @@ export function TourOverviewScreen() {
         </Pressable>
       ) : null}
 
-      {/* 6. Guests Tile (Wide & Clean) */}
-      <Pressable
-        onPress={openRosterTab}
-        style={({ pressed }) => [touchTarget, styles.guestTileWide, pressed && styles.pressed]}
-      >
-        <View style={styles.guestTileLeft}>
-          <Users color={colors.accent} size={22} />
-          <View>
-            <Text style={styles.guestTileTitle}>
-              {expectedPax > 0 ? `${expectedPax} Guests Expected` : 'Open Bookings'}
-            </Text>
-            <Text style={styles.guestTileSub}>
-              {currentRosterPax} registered on scratchpad · Tap to open Roster
-            </Text>
+      {/* 6. Guests Tile (only for live scheduled assignments) */}
+      {!isManualTripView ? (
+        <Pressable
+          onPress={openRosterTab}
+          style={({ pressed }) => [touchTarget, styles.guestTileWide, pressed && styles.pressed]}
+        >
+          <View style={styles.guestTileLeft}>
+            <Users color={colors.accent} size={22} />
+            <View>
+              <Text style={styles.guestTileTitle}>
+                {expectedPax > 0 ? `${expectedPax} Guests Expected` : 'Open Bookings'}
+              </Text>
+              <Text style={styles.guestTileSub}>
+                {currentRosterPax} registered on scratchpad · Tap to open Roster
+              </Text>
+            </View>
           </View>
-        </View>
-        <ChevronRight color={colors.textSecondary} size={20} />
-      </Pressable>
+          <ChevronRight color={colors.textSecondary} size={20} />
+        </Pressable>
+      ) : null}
 
-      {/* 7. Full Tour Window Weather Card (With Full Forecast button) */}
+      {/* 7. Full Tour Window Weather Card */}
       <Pressable
         onPress={() => navigation.navigate('DetailedWeather')}
         style={({ pressed }) => [sharedStyles.card, styles.weatherStrip, pressed && styles.pressed]}

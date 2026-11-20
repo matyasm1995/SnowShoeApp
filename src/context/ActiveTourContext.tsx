@@ -48,7 +48,7 @@ import {
 } from '../services/tripReportService';
 import { osloDateKey } from '../utils/format';
 
-const AUTO_SYNC_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+const AUTO_SYNC_MAX_AGE_MS = 30 * 60 * 1000;
 
 function getOsloMinutesOfDay(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -114,6 +114,7 @@ export interface ActiveTourContextValue {
   activeAssignment: GuideAssignment | null;
   activeRoute: ActivityRoute;
   manualRouteId: string | null;
+  isManualTripView: boolean;
   tourKey: string;
   selectAssignment: (idx: number) => void;
   selectManualRoute: (routeId: string | null) => void;
@@ -237,7 +238,6 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     void reloadProfileAndCache();
   }, [reloadProfileAndCache]);
 
-  // 30-minute auto-sync when returning to foreground
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active' && !needsSetup) {
@@ -255,9 +255,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       setSetupChecked(true);
       try {
         await syncNow();
-      } catch {
-        // Offline during setup still enters app cleanly
-      }
+      } catch {}
     },
     [syncNow]
   );
@@ -277,13 +275,11 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     );
   }, [syncData, profile.initials, selectedDate]);
 
-  // Sync local trip-report notifications whenever today's assignments or reports change
   useEffect(() => {
     if (needsSetup) return;
     void syncTripReportNotifications(parsed.assignments, submittedReports, selectedDate);
   }, [parsed.assignments, submittedReports, selectedDate, needsSetup]);
 
-  // Schedule daily 18:30 Tomorrow Dispatch notification
   useEffect(() => {
     if (needsSetup || !syncData) return;
     const tomorrow = new Date();
@@ -364,8 +360,11 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     return all.filter((n) => n.level === 'critical' || !dismissedNoteIds.includes(n.id));
   }, [syncData, dismissedNoteIds]);
 
-  const activeAssignment: GuideAssignment | null =
-    parsed.assignments[selectedAssignmentIdx] ?? null;
+  const isManualTripView = manualRouteId !== null;
+
+  const activeAssignment: GuideAssignment | null = isManualTripView
+    ? null
+    : parsed.assignments[selectedAssignmentIdx] ?? null;
 
   const dayKey = useMemo(() => osloDateKey(selectedDate), [selectedDate]);
 
@@ -398,11 +397,14 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
   }, [manualRouteId, activeAssignment, mountainOverrides, dayKey, profile.defaultMountain]);
 
   const tourKey = useMemo(() => {
+    if (isManualTripView && manualRouteId) {
+      return `ref_${manualRouteId}`;
+    }
     if (activeAssignment) {
       return `${dayKey}_${activeAssignment.tourName.replace(/\s+/g, '_')}_${selectedAssignmentIdx}`;
     }
     return `free_${dayKey}`;
-  }, [dayKey, activeAssignment, selectedAssignmentIdx]);
+  }, [isManualTripView, manualRouteId, dayKey, activeAssignment, selectedAssignmentIdx]);
 
   const selectAssignment = useCallback((idx: number) => {
     setManualRouteId(null);
@@ -459,6 +461,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     activeAssignment,
     activeRoute,
     manualRouteId,
+    isManualTripView,
     tourKey,
     selectAssignment,
     selectManualRoute,

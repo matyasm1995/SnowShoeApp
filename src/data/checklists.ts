@@ -1,4 +1,9 @@
-export type ChecklistId = 'standard' | 'mountain';
+export type ChecklistId =
+  | 'standard'
+  | 'mountain'
+  | 'fatbike'
+  | 'hg_snowshoe'
+  | 'hg_ski';
 
 export interface ChecklistItem {
   id: string;
@@ -19,28 +24,58 @@ function item(label: string): ChecklistItem {
   return { id, label };
 }
 
+const STANDARD_LABELS = [
+  'Lefse',
+  'Hot drink',
+  'Cups',
+  'Sleeping pad',
+] as const;
+
 export const CHECKLISTS: Record<ChecklistId, ChecklistTemplate> = {
   standard: {
     id: 'standard',
-    title: 'Standard day kit',
-    items: [
-      'Hot blackcurrant juice thermoses',
-      'Lefse snacks',
-      'Drinking cups',
-      'Water bottles',
-      'Spare warm mittens',
-      'Headlamps (checked battery)',
-    ].map(item),
+    title: 'Standard kit',
+    items: [...STANDARD_LABELS].map(item),
   },
   mountain: {
     id: 'mountain',
-    title: 'Mountain kit',
+    title: 'Hill Hike kit',
     items: [
-      'Standard day pack items',
-      'Avalanche beacons, probes & shovels',
-      'Emergency bivy / bothy bag',
-      'Insulating foam sleeping pad',
-      'Ski goggles (for blowing snow)',
+      ...STANDARD_LABELS,
+      'Shovel',
+      'Probe',
+      'Goggles (if windy)',
+    ].map(item),
+  },
+  fatbike: {
+    id: 'fatbike',
+    title: 'Fatbike kit',
+    items: [
+      ...STANDARD_LABELS,
+      'Goggles',
+      'Reflective vests',
+      'Bike repair kit',
+    ].map(item),
+  },
+  hg_snowshoe: {
+    id: 'hg_snowshoe',
+    title: 'HG Snowshoe kit',
+    items: [
+      ...STANDARD_LABELS,
+      'Headlamps',
+      'Matches',
+      'Firewood',
+      'Firepan',
+      'Toboggans',
+    ].map(item),
+  },
+  hg_ski: {
+    id: 'hg_ski',
+    title: 'HG / Charter Ski kit',
+    items: [
+      ...STANDARD_LABELS,
+      'Skis',
+      'Shoes',
     ].map(item),
   },
 };

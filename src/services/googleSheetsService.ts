@@ -61,6 +61,7 @@ export interface GuideAssignment {
   tourCategory: TourCategory;
   guestCount: number;
   vehicle: string | null;
+  meetingPoint: string | null;
   shipName: string | null;
   startTimeLabel: string | null;
   endTimeLabel: string | null;
@@ -381,6 +382,48 @@ function detectShipInText(text: string): string | null {
   return null;
 }
 
+function detectVehicleInText(text: string): string | null {
+  const caravelleNum = /\bcaravelle\s*#?\s*([234])\b/i.exec(text) ?? /\bc([234])\b/i.exec(text);
+  if (caravelleNum && caravelleNum[1]) {
+    return `Caravelle #${caravelleNum[1]}`;
+  }
+  if (/\bcaravelle\b/i.test(text)) return 'Caravelle';
+  if (/\bminibus\b/i.test(text)) return 'Minibus';
+  if (/\btaxi\b/i.test(text)) return 'Taxi';
+  return null;
+}
+
+function detectMeetingPoint(
+  text: string,
+  headerTitle: string,
+  shipName: string | null
+): string | null {
+  const combined = `${headerTitle} ${text}`;
+  const lower = combined.toLowerCase();
+
+  const kaiMatch = /\bkai\s*(8|21)\b/i.exec(combined);
+  if (kaiMatch && kaiMatch[1]) return `Kai ${kaiMatch[1]}`;
+
+  if (lower.includes('prostneset')) return 'Prostneset';
+  if (lower.includes('breivika')) return 'Breivika';
+  if (lower.includes('radisson')) return 'Radisson Blu';
+  if (lower.includes('fredrik langes') || lower.includes('at shop')) {
+    return 'Tromsø Outdoor Shop';
+  }
+
+  const isAfternoonShip =
+    lower.includes('14:15') ||
+    lower.includes('14.15') ||
+    /\bhg\b/i.test(headerTitle) ||
+    Boolean(shipName && (lower.includes('hurtigruten') || lower.includes('havila') || lower.includes('capella') || lower.includes('castor') || lower.includes('polaris') || lower.includes('pollux')));
+
+  if (isAfternoonShip) {
+    return 'Prostneset';
+  }
+
+  return null;
+}
+
 function buildDisplayTourName(params: {
   headerTitle: string;
   cellText: string;
@@ -426,22 +469,10 @@ function classifyCellColor(hexColor: string): TourColorStatus {
   const g = parseInt(clean.substring(2, 4), 16);
   const b = parseInt(clean.substring(4, 6), 16);
 
-  // Red (e.g. #ff0000)
-  if (r > 190 && g < 80 && b < 80) {
-    return 'closed';
-  }
+  if (r > 190 && g < 80 && b < 80) return 'closed';
+  if (g > 170 && r < 140 && b < 140) return 'confirmed';
+  if (r > 200 && g > 200 && b < 100) return 'pending';
 
-  // Pure Green (e.g. #00ff00 or #00e676)
-  if (g > 170 && r < 140 && b < 140) {
-    return 'confirmed';
-  }
-
-  // Pure Yellow (e.g. #ffff00)
-  if (r > 200 && g > 200 && b < 100) {
-    return 'pending';
-  }
-
-  // Peach/cream weekend shading or default cell fill
   return 'open';
 }
 
@@ -691,7 +722,6 @@ export function parseGuideAssignments(
       continue;
     }
 
-    // Hide crossed-out (strikethrough) tours completely
     const isStrikethrough = (fontLineRow[c] || '').toString().toLowerCase().includes('line-through');
     if (isStrikethrough) {
       continue;
@@ -719,7 +749,6 @@ export function parseGuideAssignments(
       commentCols1Based.push(c + 3, c + 4);
       noteCols0Based.push(c + 2, c + 3);
 
-      // Check adjacent columns up through column BB (index 53) for ship name
       const maxShipCol = Math.max(c + 8, SHIP_COL_BB_INDEX);
       for (let s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
         if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship' || s === SHIP_COL_BB_INDEX) {
@@ -774,9 +803,8 @@ export function parseGuideAssignments(
       shipName = detectShipInText(allNoteAndCommentText);
     }
 
-    let vehicle: string | null = null;
-    if (/\bminibus\b/i.test(allNoteAndCommentText)) vehicle = 'Minibus';
-    else if (/\bcaravelle\b/i.test(allNoteAndCommentText)) vehicle = 'Caravelle';
+    const vehicle = detectVehicleInText(allNoteAndCommentText);
+    const meetingPoint = detectMeetingPoint(allNoteAndCommentText, headerTitle, shipName);
 
     const { activity, tourCategory } = inferTourCategory(headerTitle, allNoteAndCommentText);
     const isCharter = c >= 44;
@@ -818,6 +846,7 @@ export function parseGuideAssignments(
       tourCategory,
       guestCount,
       vehicle,
+      meetingPoint,
       shipName,
       startTimeLabel: parsedTime?.startLabel ?? null,
       endTimeLabel:
@@ -834,7 +863,6 @@ export function parseGuideAssignments(
     });
   }
 
-  // Sort chronologically by start time ascending
   assignments.sort((a, b) => {
     const aMin = a.startMinutes ?? 9999;
     const bMin = b.startMinutes ?? 9999;

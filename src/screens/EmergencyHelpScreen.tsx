@@ -14,6 +14,7 @@ import { MapPin, Phone, RefreshCw, ShieldAlert } from 'lucide-react-native';
 
 import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
+import { useTracking } from '../context/TrackingContext';
 import { ASSIST_STEPS, CORE_CONTACTS } from '../data/contacts';
 import { colors, sharedStyles, touchTarget } from '../theme';
 
@@ -23,12 +24,14 @@ function formatDecimal(lat: number, lon: number): string {
   return `${Math.abs(lat).toFixed(5)}° ${ns}, ${Math.abs(lon).toFixed(5)}° ${ew}`;
 }
 
-function toDegreesMinutes(val: number, posHemi: string, negHemi: string): string {
+function toDegreesMinutesSeconds(val: number, posHemi: string, negHemi: string): string {
   const hemi = val >= 0 ? posHemi : negHemi;
   const abs = Math.abs(val);
   const deg = Math.floor(abs);
-  const min = (abs - deg) * 60;
-  return `${deg}° ${min.toFixed(3)}' ${hemi}`;
+  const minFloat = (abs - deg) * 60;
+  const min = Math.floor(minFloat);
+  const sec = (minFloat - min) * 60;
+  return `${deg}° ${String(min).padStart(2, '0')}' ${sec.toFixed(1)}" ${hemi}`;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -48,6 +51,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 export function EmergencyHelpScreen() {
   const { activeRoute, activeAssignment } = useActiveTour();
+  const { trackedRoute } = useTracking();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{
@@ -117,7 +121,6 @@ export function EmergencyHelpScreen() {
       let gotLiveFix = false;
       let hasAnyFix = false;
 
-      // 1. Show last known position immediately if available
       try {
         const last = await Location.getLastKnownPositionAsync();
         if (last && mountedRef.current && reqId === requestIdRef.current) {
@@ -126,7 +129,6 @@ export function EmergencyHelpScreen() {
         }
       } catch {}
 
-      // 2. Attach live watcher (same reliable mechanism used by Tracking)
       try {
         watcherRef.current = await Location.watchPositionAsync(
           {
@@ -144,7 +146,6 @@ export function EmergencyHelpScreen() {
         );
       } catch {}
 
-      // 3. Bounded one-shot fallback if watcher hasn't delivered yet
       if (!gotLiveFix) {
         try {
           const fresh = await withTimeout(
@@ -220,6 +221,8 @@ export function EmergencyHelpScreen() {
     await dial('113');
   };
 
+  const contextRoute = trackedRoute ?? (activeAssignment ? activeRoute : null);
+
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.content}>
       {/* 1. Live GPS Position */}
@@ -236,8 +239,8 @@ export function EmergencyHelpScreen() {
               {formatDecimal(coords.lat, coords.lon)}
             </Text>
             <Text style={styles.coordDms} selectable>
-              {toDegreesMinutes(coords.lat, 'N', 'S')} ·{' '}
-              {toDegreesMinutes(coords.lon, 'E', 'W')}
+              {toDegreesMinutesSeconds(coords.lat, 'N', 'S')} ·{' '}
+              {toDegreesMinutesSeconds(coords.lon, 'E', 'W')}
             </Text>
             <View style={styles.metaRow}>
               <View style={styles.metaPill}>
@@ -280,15 +283,17 @@ export function EmergencyHelpScreen() {
         </Pressable>
       </View>
 
-      {/* 2. Active Area Context */}
-      <View style={sharedStyles.card}>
-        <Text style={styles.contextLabel}>ACTIVE AREA / TOUR</Text>
-        <Text style={styles.contextTitle}>{activeRoute.name}</Text>
-        <Text style={styles.contextSub}>
-          Area: {activeRoute.area}
-          {activeAssignment ? ` · ${activeAssignment.guestCount} guests` : ''}
-        </Text>
-      </View>
+      {/* 2. Active Area Context (only shown when on a tour or live tracking) */}
+      {contextRoute ? (
+        <View style={sharedStyles.card}>
+          <Text style={styles.contextLabel}>ACTIVE AREA / TOUR</Text>
+          <Text style={styles.contextTitle}>{contextRoute.name}</Text>
+          <Text style={styles.contextSub}>
+            Area: {contextRoute.area}
+            {activeAssignment ? ` · ${activeAssignment.guestCount} guests` : ''}
+          </Text>
+        </View>
+      ) : null}
 
       {/* 3. Call 113 & Hjelp 113 */}
       <Pressable

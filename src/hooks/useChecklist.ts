@@ -14,7 +14,7 @@ export interface CustomChecklistTemplate {
   items: ChecklistItem[];
 }
 
-const TEMPLATES_STORAGE_KEY = 'checklist:templates:v1';
+const TEMPLATES_STORAGE_KEY = 'checklist:templates:v2';
 const ASSIGNMENTS_STORAGE_KEY = 'checklist:assign:v1';
 
 function checkedStorageKey(templateId: string, date = new Date()): string {
@@ -22,18 +22,16 @@ function checkedStorageKey(templateId: string, date = new Date()): string {
 }
 
 function defaultTemplatesMap(): Record<string, CustomChecklistTemplate> {
-  return {
-    standard: {
-      id: 'standard',
-      title: CHECKLISTS.standard.title,
-      items: [...CHECKLISTS.standard.items],
-    },
-    mountain: {
-      id: 'mountain',
-      title: CHECKLISTS.mountain.title,
-      items: [...CHECKLISTS.mountain.items],
-    },
-  };
+  const map: Record<string, CustomChecklistTemplate> = {};
+  for (const key of Object.keys(CHECKLISTS) as ChecklistId[]) {
+    const tpl = CHECKLISTS[key];
+    map[key] = {
+      id: tpl.id,
+      title: tpl.title,
+      items: [...tpl.items],
+    };
+  }
+  return map;
 }
 
 function makeId(prefix: string): string {
