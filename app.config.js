@@ -2,7 +2,7 @@ module.exports = {
   expo: {
     name: "TO Guides",
     slug: "arctic-snowshoe-guide",
-    version: "1.6.1",
+    version: "1.7.0",
     orientation: "portrait",
     userInterfaceStyle: "dark",
     backgroundColor: "#0B0D10",
@@ -15,7 +15,7 @@ module.exports = {
     },
     android: {
       package: "com.toguides.app",
-      versionCode: 6,
+      versionCode: 7,
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#0B0D10"

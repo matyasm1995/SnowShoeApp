@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-import { osloDateKey } from '../utils/format';
+import { formatClock, osloDateKey } from '../utils/format';
 import type {
   DutyStatus,
   GuideAssignment,
@@ -10,7 +10,13 @@ import type {
 import type { SubmittedTripReportRecord } from './tripReportService';
 
 const ASKED_NOTIF_KEY = 'pref:asked_notifications_v1';
+const LAST_TOMORROW_DISPATCH_KEY = 'pref:last_tomorrow_dispatch_v1';
 const TOMORROW_DISPATCH_NOTIF_ID = 'arctic-guide-tomorrow-dispatch';
+
+interface LastTomorrowDispatchRecord {
+  targetDateKey: string;
+  fingerprint: string;
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -133,28 +139,35 @@ export async function cancelTripReportNotification(tourKey: string): Promise<voi
   } catch {}
 }
 
+function buildTomorrowDispatchFingerprint(params: {
+  tomorrowAssignments: GuideAssignment[];
+  tomorrowDuty: DutyStatus;
+}): string {
+  if (params.tomorrowAssignments.length > 0) {
+    const toursSig = params.tomorrowAssignments
+      .map(
+        (t) =>
+          `${t.tourName}|${t.startTimeLabel ?? ''}|${t.endTimeLabel ?? ''}|${t.guestCount}|${t.vehicle ?? ''}|${t.meetingPoint ?? ''}`
+      )
+      .join(';');
+    return `tours:${toursSig}|rc:${params.tomorrowDuty.alsoRentalCenter ? '1' : '0'}`;
+  }
+  return `duty:${params.tomorrowDuty.type}|${params.tomorrowDuty.title}`;
+}
+
 export async function scheduleTomorrowDispatchNotification(params: {
   tomorrowDate: Date;
   tomorrowAssignments: GuideAssignment[];
   tomorrowDuty: DutyStatus;
+  syncedAtIso?: string;
+  notifyIfChangedAfterDispatch?: boolean;
 }): Promise<void> {
   try {
     const granted = await ensureNotificationPermission();
     if (!granted) return;
 
-    // Always cancel the previous scheduled dispatch notification first
-    try {
-      await Notifications.cancelScheduledNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
-    } catch {}
-
-    const now = new Date();
-    const target1830 = new Date(now);
-    target1830.setHours(18, 30, 0, 0);
-
-    // If 18:30 has already passed today, don't schedule for the past
-    if (target1830.getTime() <= now.getTime() + 60000) {
-      return;
-    }
+    const targetDateKey = osloDateKey(params.tomorrowDate);
+    const fingerprint = buildTomorrowDispatchFingerprint(params);
 
     const dayName = params.tomorrowDate.toLocaleDateString('en-GB', {
       weekday: 'short',
@@ -171,6 +184,9 @@ export async function scheduleTomorrowDispatchNotification(params: {
         const pax = t.guestCount > 0 ? ` (${t.guestCount} pax)` : '';
         return `${time}${t.tourName}${pax}`;
       });
+      if (params.tomorrowDuty.alsoRentalCenter) {
+        tourSummaries.push('Rental Center');
+      }
       body = tourSummaries.join(' · ');
     } else if (params.tomorrowDuty.type === 'day_off') {
       title = `Tomorrow: Day Off (${dayName})`;
@@ -180,18 +196,73 @@ export async function scheduleTomorrowDispatchNotification(params: {
       body = params.tomorrowDuty.detail || 'On duty at Tromsø Outdoor tomorrow.';
     }
 
+    if (params.syncedAtIso) {
+      const syncedDate = new Date(params.syncedAtIso);
+      if (!Number.isNaN(syncedDate.getTime())) {
+        body = `${body} · synced ${formatClock(syncedDate)}`;
+      }
+    }
+
+    // Always cancel the previous scheduled dispatch notification first
+    try {
+      await Notifications.cancelScheduledNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
+    } catch {}
+
+    const now = new Date();
+    const target1830 = new Date(now);
+    target1830.setHours(18, 30, 0, 0);
+
+    let lastRecord: LastTomorrowDispatchRecord | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(LAST_TOMORROW_DISPATCH_KEY);
+      if (raw) lastRecord = JSON.parse(raw) as LastTomorrowDispatchRecord;
+    } catch {}
+
+    // If 18:30 has already passed today: only send an immediate follow-up if called from
+    // background sync and tomorrow's schedule changed compared to what was previously scheduled
+    if (target1830.getTime() <= now.getTime() + 60000) {
+      const changedSinceLastDispatch =
+        params.notifyIfChangedAfterDispatch === true &&
+        lastRecord !== null &&
+        lastRecord.targetDateKey === targetDateKey &&
+        lastRecord.fingerprint !== fingerprint &&
+        now.getHours() < 21;
+
+      if (changedSinceLastDispatch) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `Tomorrow's Schedule Updated (${dayName})`,
+            body,
+            data: { targetDateIso: targetDateKey },
+          },
+          trigger: null,
+        });
+      }
+
+      try {
+        const nextRec: LastTomorrowDispatchRecord = { targetDateKey, fingerprint };
+        await AsyncStorage.setItem(LAST_TOMORROW_DISPATCH_KEY, JSON.stringify(nextRec));
+      } catch {}
+      return;
+    }
+
     await Notifications.scheduleNotificationAsync({
       identifier: TOMORROW_DISPATCH_NOTIF_ID,
       content: {
         title,
         body,
-        data: { targetDateIso: osloDateKey(params.tomorrowDate) },
+        data: { targetDateIso: targetDateKey },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
         date: target1830,
       },
     });
+
+    try {
+      const nextRec: LastTomorrowDispatchRecord = { targetDateKey, fingerprint };
+      await AsyncStorage.setItem(LAST_TOMORROW_DISPATCH_KEY, JSON.stringify(nextRec));
+    } catch {}
   } catch {
     // Ignore in unsupported environments
   }

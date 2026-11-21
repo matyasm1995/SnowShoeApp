@@ -1,17 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRoute } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import {
   AlertTriangle,
+  Crosshair,
+  MapPin,
   Mountain,
+  Pencil,
+  Plus,
   Sun,
+  Trash2,
+  X,
 } from 'lucide-react-native';
 
 import { WeatherIcon } from '../components/WeatherIcon';
@@ -20,10 +33,18 @@ import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
 import type { ElevationMode } from '../data/locations';
 import {
-  ROUTE_CATALOG,
   SANDNESSUNDBRUA_GUST_WARNING_MS,
   SANDNESSUNDBRUA_POINT,
 } from '../data/routes';
+import {
+  BUILTIN_WEATHER_SPOTS,
+  isValidLatLon,
+  loadCustomWeatherSpots,
+  parseCoordinatesInput,
+  routeIdToWeatherSpotId,
+  saveCustomWeatherSpots,
+  type WeatherSpot,
+} from '../data/weatherSpots';
 import { useDualForecast } from '../hooks/useDualForecast';
 import {
   avalancheDangerColor,
@@ -32,7 +53,11 @@ import {
   type AvalancheWarning,
   type WeatherAlertItem,
 } from '../services/alertsService';
-import type { HourlyForecastItem } from '../services/weatherService';
+import {
+  isItemOverlappingWindow,
+  summarizeForecastWindow,
+  type HourlyForecastItem,
+} from '../services/weatherService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 import {
   calculateWindChill,
@@ -50,6 +75,10 @@ import {
   osloDateKey,
 } from '../utils/format';
 
+const HOUR_CARD_WIDTH = 88;
+const HOUR_CARD_GAP = 8;
+const HOUR_CARD_STRIDE = HOUR_CARD_WIDTH + HOUR_CARD_GAP;
+
 function getOsloMinutesOfDay(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Oslo',
@@ -62,22 +91,31 @@ function getOsloMinutesOfDay(date: Date): number {
   return hour * 60 + minute;
 }
 
-function isForecastHourInTourWindow(
-  isoTime: string,
-  targetKey: string,
-  startMinutes: number | null,
-  endMinutes: number | null
-): boolean {
-  if (startMinutes === null || endMinutes === null) return false;
-  const d = new Date(isoTime);
-  if (Number.isNaN(d.getTime())) return false;
-  if (osloDateKey(d) !== targetKey) return false;
-  const m = getOsloMinutesOfDay(d);
-  return m + 59 >= startMinutes && m <= endMinutes;
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('GPS request timed out.')), ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
 
 export function WeatherScreen() {
-  const { activeAssignment, activeRoute, selectedDate, selectManualRoute } = useActiveTour();
+  const route = useRoute();
+  const paramSpotId = (route.params as { spotId?: string } | undefined)?.spotId;
+
+  const { activeAssignment, activeRoute, selectedDate } = useActiveTour();
+
+  const [customSpots, setCustomSpots] = useState<WeatherSpot[]>([]);
+  const [selectedSpotId, setSelectedSpotId] = useState<string>(
+    () => paramSpotId ?? routeIdToWeatherSpotId(activeRoute.id)
+  );
   const [elevation, setElevation] = useState<ElevationMode>('trailhead');
   const [selectedTimeIndex, setSelectedTimeIndex] = useState<number>(0);
   const [timeSelectionPinned, setTimeSelectionPinned] = useState<boolean>(false);
@@ -85,26 +123,80 @@ export function WeatherScreen() {
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
 
+  // Add/Edit custom weather point modal state
+  const [showSpotModal, setShowSpotModal] = useState(false);
+  const [editingSpotId, setEditingSpotId] = useState<string | null>(null);
+  const [spotNameInput, setSpotNameInput] = useState('');
+  const [pasteInput, setPasteInput] = useState('');
+  const [latInput, setLatInput] = useState('');
+  const [lonInput, setLonInput] = useState('');
+  const [eleInput, setEleInput] = useState('');
+  const [spotFormError, setSpotFormError] = useState<string | null>(null);
+  const [locatingGps, setLocatingGps] = useState(false);
+
   const timelineScrollRef = useRef<ScrollView>(null);
+  const pendingScrollIdxRef = useRef<number | null>(null);
+  const timelineContentWidthRef = useRef<number>(0);
+
+  const scrollToCardIndex = useCallback((idx: number, animated: boolean) => {
+    const scrollX = Math.max(0, idx * HOUR_CARD_STRIDE);
+    timelineScrollRef.current?.scrollTo({ x: scrollX, animated });
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void loadCustomWeatherSpots().then((loaded) => {
+        if (active) setCustomSpots(loaded);
+      });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    if (paramSpotId) {
+      setSelectedSpotId(paramSpotId);
+      setTimeSelectionPinned(false);
+    }
+  }, [paramSpotId]);
+
+  useEffect(() => {
+    if (!paramSpotId) {
+      setSelectedSpotId(routeIdToWeatherSpotId(activeRoute.id));
+      setTimeSelectionPinned(false);
+    }
+  }, [activeRoute.id, paramSpotId]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), CONFIG.weather.refreshIntervalMs);
     return () => clearInterval(timer);
   }, []);
 
+  const allSpots = useMemo<WeatherSpot[]>(
+    () => [...BUILTIN_WEATHER_SPOTS, ...customSpots],
+    [customSpots]
+  );
+
+  const activeSpot: WeatherSpot = useMemo(
+    () => allSpots.find((s) => s.id === selectedSpotId) ?? BUILTIN_WEATHER_SPOTS[0]!,
+    [allSpots, selectedSpotId]
+  );
+
   useEffect(() => {
     setTimeSelectionPinned(false);
-    if (!activeRoute.summit) {
+    if (!activeSpot.summit) {
       setElevation('trailhead');
     }
-  }, [activeRoute.id, activeRoute.summit, activeAssignment?.tourName]);
+  }, [activeSpot.id, activeSpot.summit, activeAssignment?.tourName]);
 
   useEffect(() => {
     let active = true;
-    void fetchWeatherAlerts(activeRoute.weatherPoint, selectedDate).then((items) => {
+    void fetchWeatherAlerts(activeSpot.point, selectedDate).then((items) => {
       if (active) setWeatherAlerts(items);
     });
-    if (activeRoute.category === 'hill_hike') {
+    if (activeSpot.showAvalanche) {
       void fetchTromsoAvalanche(selectedDate).then((av) => {
         if (active) setAvalanche(av);
       });
@@ -114,10 +206,10 @@ export function WeatherScreen() {
     return () => {
       active = false;
     };
-  }, [activeRoute.weatherPoint, activeRoute.category, selectedDate]);
+  }, [activeSpot.point, activeSpot.showAvalanche, selectedDate]);
 
-  const effectiveElevation: ElevationMode = activeRoute.summit ? elevation : 'trailhead';
-  const dualForecast = useDualForecast(activeRoute.weatherPoint, activeRoute.summit);
+  const effectiveElevation: ElevationMode = activeSpot.summit ? elevation : 'trailhead';
+  const dualForecast = useDualForecast(activeSpot.point, activeSpot.summit);
   const bridgeForecast = useDualForecast(SANDNESSUNDBRUA_POINT, null);
 
   const activeForecast =
@@ -131,27 +223,69 @@ export function WeatherScreen() {
   const tourStartMinutes = activeAssignment?.startMinutes ?? null;
   const tourEndMinutes = activeAssignment?.endMinutes ?? null;
 
-  // Auto-scroll timeline smoothly to tour start hour while keeping 'Now' at far-left
+  const dateOutsideForecast = useMemo(() => {
+    if (hourlyList.length === 0 || targetDateKey === todayKey) return false;
+    return !hourlyList.some((item) => {
+      const d = new Date(item.time);
+      return !Number.isNaN(d.getTime()) && osloDateKey(d) === targetDateKey;
+    });
+  }, [hourlyList, targetDateKey, todayKey]);
+
+  // Auto-scroll timeline accurately to tour start (or midday on future selected date)
   useEffect(() => {
     if (timeSelectionPinned || hourlyList.length === 0) return;
 
+    let targetIdx = 0;
+
     if (tourStartMinutes !== null && tourEndMinutes !== null) {
       const idx = hourlyList.findIndex((item) =>
-        isForecastHourInTourWindow(item.time, targetDateKey, tourStartMinutes, tourEndMinutes)
+        isItemOverlappingWindow(item, targetDateKey, tourStartMinutes, tourEndMinutes)
       );
       if (idx !== -1) {
-        setSelectedTimeIndex(idx);
-        // Scroll horizontally (card width 82 + gap 8 = 90dp)
-        const scrollX = Math.max(0, idx * 90 - 30);
-        setTimeout(() => {
-          timelineScrollRef.current?.scrollTo({ x: scrollX, animated: true });
-        }, 150);
-        return;
+        targetIdx = idx;
+      } else if (targetDateKey > todayKey) {
+        const dayIdx = hourlyList.findIndex((item) => {
+          const d = new Date(item.time);
+          return !Number.isNaN(d.getTime()) && osloDateKey(d) === targetDateKey;
+        });
+        if (dayIdx !== -1) targetIdx = dayIdx;
       }
+    } else if (targetDateKey > todayKey) {
+      let bestIdx = -1;
+      let bestDiff = Infinity;
+      for (let i = 0; i < hourlyList.length; i++) {
+        const item = hourlyList[i];
+        if (!item) continue;
+        const d = new Date(item.time);
+        if (Number.isNaN(d.getTime()) || osloDateKey(d) !== targetDateKey) continue;
+        const m = getOsloMinutesOfDay(d);
+        const center = m + (item.stepHours === 6 ? 180 : 0);
+        const diff = Math.abs(center - 720);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx !== -1) targetIdx = bestIdx;
     }
 
-    setSelectedTimeIndex(0);
-  }, [timeSelectionPinned, hourlyList, tourStartMinutes, tourEndMinutes, targetDateKey]);
+    setSelectedTimeIndex(targetIdx);
+    pendingScrollIdxRef.current = targetIdx;
+
+    if (timelineContentWidthRef.current > 0) {
+      requestAnimationFrame(() => {
+        scrollToCardIndex(targetIdx, true);
+      });
+    }
+  }, [
+    timeSelectionPinned,
+    hourlyList,
+    tourStartMinutes,
+    tourEndMinutes,
+    targetDateKey,
+    todayKey,
+    scrollToCardIndex,
+  ]);
 
   const clampedTimeIndex =
     hourlyList.length > 0 ? Math.min(selectedTimeIndex, hourlyList.length - 1) : 0;
@@ -175,28 +309,16 @@ export function WeatherScreen() {
     dualForecast.top?.current ??
     null;
 
-  const bridgePeak = useMemo(() => {
-    if (!activeRoute.usesBridgeWarning || !bridgeForecast.bottom?.hourly) return null;
-    const winStart = tourStartMinutes !== null ? tourStartMinutes - 60 : 0;
-    const winEnd = tourEndMinutes !== null ? tourEndMinutes + 60 : 24 * 60;
-    let maxGust = 0;
-    let maxTime = '';
-
-    for (const item of bridgeForecast.bottom.hourly) {
-      const d = new Date(item.time);
-      if (Number.isNaN(d.getTime()) || osloDateKey(d) !== targetDateKey) continue;
-      const m = getOsloMinutesOfDay(d);
-      if (m < winStart || m > winEnd) continue;
-      const g = item.windGustMs > 0 ? item.windGustMs : item.windSpeedMs;
-      if (g > maxGust) {
-        maxGust = g;
-        maxTime = formatClock(d);
-      }
-    }
-
-    return maxGust > 0 ? { maxGust, maxTime } : null;
+  const bridgeSummary = useMemo(() => {
+    if (!activeSpot.usesBridgeWarning) return null;
+    return summarizeForecastWindow(
+      bridgeForecast.bottom?.hourly,
+      targetDateKey,
+      tourStartMinutes !== null ? Math.max(0, tourStartMinutes - 60) : null,
+      tourEndMinutes !== null ? Math.min(24 * 60, tourEndMinutes + 60) : null
+    );
   }, [
-    activeRoute.usesBridgeWarning,
+    activeSpot.usesBridgeWarning,
     bridgeForecast.bottom?.hourly,
     targetDateKey,
     tourStartMinutes,
@@ -204,7 +326,12 @@ export function WeatherScreen() {
   ]);
 
   const bridgeAlert =
-    bridgePeak !== null && bridgePeak.maxGust >= SANDNESSUNDBRUA_GUST_WARNING_MS;
+    bridgeSummary !== null &&
+    bridgeSummary.hasData &&
+    bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
+
+  const resolvedBottomElevation =
+    dualForecast.bottom?.point.elevationMeters ?? activeSpot.point.elevationMeters ?? 0;
 
   const windKmh = activeConditions ? metersPerSecondToKmh(activeConditions.windSpeedMs) : null;
   const felt =
@@ -217,18 +344,26 @@ export function WeatherScreen() {
       : false;
   const exposure = felt !== null ? exposureRisk(felt) : null;
 
-  const daylight = useMemo(() => tromsoDaylight(selectedDate), [selectedDate]);
+  const daylightDate = useMemo(() => {
+    if (activeConditions) {
+      const d = new Date(activeConditions.time);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    return selectedDate;
+  }, [activeConditions, selectedDate]);
+
+  const daylight = useMemo(() => tromsoDaylight(daylightDate), [daylightDate]);
 
   const snowlineInfo = useMemo(() => {
     const tHead = bottomHourItem?.airTemperatureC ?? activeConditions?.airTemperatureC ?? 0;
     const tSummit = summitHourItem?.airTemperatureC ?? null;
     return estimateSnowlineMeters(
-      activeRoute.trailhead.elevationMeters,
+      resolvedBottomElevation,
       tHead,
-      activeRoute.summit?.elevationMeters ?? null,
+      activeSpot.summit?.elevationMeters ?? null,
       tSummit
     );
-  }, [bottomHourItem, summitHourItem, activeConditions, activeRoute]);
+  }, [bottomHourItem, summitHourItem, activeConditions, resolvedBottomElevation, activeSpot.summit]);
 
   const freezingValueLabel = useMemo(() => {
     const tHead = bottomHourItem?.airTemperatureC ?? activeConditions?.airTemperatureC ?? 0;
@@ -241,13 +376,188 @@ export function WeatherScreen() {
     return tHead <= 0.5 ? 'Below 0 m' : 'Above summit';
   }, [snowlineInfo, bottomHourItem, activeConditions]);
 
-  const activeTimeLabel = activeConditions
-    ? new Date(activeConditions.time).toLocaleTimeString('en-GB', {
-        timeZone: 'Europe/Oslo',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '';
+  const activeTimeLabel = useMemo(() => {
+    if (!activeConditions) return 'NOW';
+    const d = new Date(activeConditions.time);
+    if (Number.isNaN(d.getTime())) return 'NOW';
+    const clock = d.toLocaleTimeString('en-GB', {
+      timeZone: 'Europe/Oslo',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const prefix =
+      osloDateKey(d) !== todayKey
+        ? `${d.toLocaleDateString('en-GB', {
+            timeZone: 'Europe/Oslo',
+            weekday: 'short',
+            day: 'numeric',
+            month: 'short',
+          })} `
+        : '';
+    const stepTag = activeConditions.stepHours === 6 ? ' · 6H' : '';
+    return `${prefix}${clock}${stepTag}`.toUpperCase();
+  }, [activeConditions, todayKey]);
+
+  const selectedDateShort = useMemo(
+    () =>
+      selectedDate.toLocaleDateString('en-GB', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+      }),
+    [selectedDate]
+  );
+
+  const openAddSpotModal = () => {
+    setEditingSpotId(null);
+    setSpotNameInput('');
+    setPasteInput('');
+    setLatInput('');
+    setLonInput('');
+    setEleInput('');
+    setSpotFormError(null);
+    setShowSpotModal(true);
+  };
+
+  const openEditSpotModal = (spot: WeatherSpot) => {
+    setEditingSpotId(spot.id);
+    setSpotNameInput(spot.name);
+    setPasteInput('');
+    setLatInput(spot.point.latitude.toFixed(5));
+    setLonInput(spot.point.longitude.toFixed(5));
+    setEleInput(
+      spot.point.elevationMeters !== undefined && spot.point.elevationMeters !== null
+        ? String(Math.round(spot.point.elevationMeters))
+        : ''
+    );
+    setSpotFormError(null);
+    setShowSpotModal(true);
+  };
+
+  const handlePasteCoordinates = (value: string) => {
+    setPasteInput(value);
+    const parsed = parseCoordinatesInput(value);
+    if (parsed) {
+      setLatInput(parsed.latitude.toFixed(5));
+      setLonInput(parsed.longitude.toFixed(5));
+      setSpotFormError(null);
+    }
+  };
+
+  const handleUseCurrentGps = async () => {
+    setLocatingGps(true);
+    setSpotFormError(null);
+    try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setSpotFormError('Device GPS / Location Services are turned off.');
+        return;
+      }
+
+      let perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        perm = await Location.requestForegroundPermissionsAsync();
+      }
+      if (perm.status !== 'granted') {
+        setSpotFormError('Location permission denied. Enter coordinates manually.');
+        return;
+      }
+
+      const pos = await withTimeout(
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        10000
+      );
+      setLatInput(pos.coords.latitude.toFixed(5));
+      setLonInput(pos.coords.longitude.toFixed(5));
+      if (pos.coords.altitude !== null && Number.isFinite(pos.coords.altitude)) {
+        const correctedEle = Math.max(0, Math.round(pos.coords.altitude - 32));
+        setEleInput(String(correctedEle));
+      }
+    } catch (err) {
+      setSpotFormError(
+        err instanceof Error ? err.message : 'Could not read GPS position.'
+      );
+    } finally {
+      setLocatingGps(false);
+    }
+  };
+
+  const handleSaveCustomSpot = async () => {
+    const cleanName = spotNameInput.trim();
+    if (!cleanName) {
+      setSpotFormError('Enter a name for this weather point.');
+      return;
+    }
+
+    const lat = Number(latInput.trim().replace(',', '.'));
+    const lon = Number(lonInput.trim().replace(',', '.'));
+    if (!isValidLatLon(lat, lon)) {
+      setSpotFormError('Enter valid latitude (-90..90) and longitude (-180..180).');
+      return;
+    }
+
+    const eleTrim = eleInput.trim();
+    let parsedEle: number | null = null;
+    if (eleTrim.length > 0) {
+      const num = Number(eleTrim.replace(',', '.'));
+      if (!Number.isFinite(num) || num < -100 || num > 5000) {
+        setSpotFormError('Elevation must be a valid number in meters (or leave blank).');
+        return;
+      }
+      parsedEle = Math.round(num);
+    }
+
+    const spotId = editingSpotId ?? `custom-${Date.now()}`;
+    const newSpot: WeatherSpot = {
+      id: spotId,
+      name: cleanName,
+      subtitle: `${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E`,
+      point: {
+        latitude: lat,
+        longitude: lon,
+        elevationMeters: parsedEle,
+      },
+      summit: null,
+      showAvalanche: false,
+      usesBridgeWarning: false,
+      isCustom: true,
+    };
+
+    const nextSpots = editingSpotId
+      ? customSpots.map((s) => (s.id === editingSpotId ? newSpot : s))
+      : [...customSpots, newSpot];
+
+    await saveCustomWeatherSpots(nextSpots);
+    setCustomSpots(nextSpots);
+    setSelectedSpotId(spotId);
+    setTimeSelectionPinned(false);
+    setShowSpotModal(false);
+  };
+
+  const confirmDeleteCustomSpot = (spot: WeatherSpot) => {
+    Alert.alert(
+      'Delete Custom Point',
+      `Remove "${spot.name}" from your Weather locations?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            const nextSpots = customSpots.filter((s) => s.id !== spot.id);
+            void saveCustomWeatherSpots(nextSpots).then(() => {
+              setCustomSpots(nextSpots);
+              if (selectedSpotId === spot.id) {
+                setSelectedSpotId(BUILTIN_WEATHER_SPOTS[0]!.id);
+                setTimeSelectionPinned(false);
+              }
+              setShowSpotModal(false);
+            });
+          },
+        },
+      ]
+    );
+  };
 
   const avColors = avalanche ? avalancheDangerColor(avalanche.dangerLevel) : null;
 
@@ -261,8 +571,8 @@ export function WeatherScreen() {
           onRefresh={() => {
             dualForecast.reload();
             bridgeForecast.reload();
-            void fetchWeatherAlerts(activeRoute.weatherPoint, selectedDate).then(setWeatherAlerts);
-            if (activeRoute.category === 'hill_hike') {
+            void fetchWeatherAlerts(activeSpot.point, selectedDate).then(setWeatherAlerts);
+            if (activeSpot.showAvalanche) {
               void fetchTromsoAvalanche(selectedDate).then(setAvalanche);
             }
           }}
@@ -271,21 +581,22 @@ export function WeatherScreen() {
         />
       }
     >
-      {/* 1. Location & Bridge Pills */}
+      {/* 1. Curated Weather Locations + Custom Points */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.pillRow}
       >
-        {ROUTE_CATALOG.map((item) => {
-          const selected = item.id === activeRoute.id;
+        {allSpots.map((spot) => {
+          const selected = spot.id === activeSpot.id;
           return (
             <Pressable
-              key={item.id}
+              key={spot.id}
               onPress={() => {
-                selectManualRoute(item.id);
+                setSelectedSpotId(spot.id);
                 setTimeSelectionPinned(false);
               }}
+              onLongPress={spot.isCustom ? () => openEditSpotModal(spot) : undefined}
               style={({ pressed }) => [
                 touchTarget,
                 styles.pill,
@@ -293,13 +604,58 @@ export function WeatherScreen() {
                 pressed && styles.pressed,
               ]}
             >
+              {spot.isCustom ? (
+                <MapPin
+                  color={selected ? colors.accentSoft : colors.ice}
+                  size={13}
+                  style={{ marginRight: 4 }}
+                />
+              ) : null}
               <Text style={[styles.pillText, selected && styles.pillTextSelected]}>
-                {item.shortLabel}
+                {spot.name}
               </Text>
             </Pressable>
           );
         })}
+
+        <Pressable
+          onPress={openAddSpotModal}
+          style={({ pressed }) => [touchTarget, styles.addPill, pressed && styles.pressed]}
+        >
+          <Plus color={colors.accent} size={15} />
+          <Text style={styles.addPillText}>Add</Text>
+        </Pressable>
       </ScrollView>
+
+      {/* Custom Spot Coordinates & Edit/Delete Bar */}
+      {activeSpot.isCustom ? (
+        <View style={styles.customSpotBar}>
+          <View style={styles.customSpotInfo}>
+            <MapPin color={colors.ice} size={14} />
+            <Text style={styles.customSpotMeta} numberOfLines={1}>
+              {activeSpot.point.latitude.toFixed(4)}°N, {activeSpot.point.longitude.toFixed(4)}°E ·{' '}
+              {resolvedBottomElevation}m
+            </Text>
+          </View>
+          <View style={styles.customSpotActions}>
+            <Pressable
+              onPress={() => openEditSpotModal(activeSpot)}
+              hitSlop={8}
+              style={({ pressed }) => [styles.customActionBtn, pressed && styles.pressed]}
+            >
+              <Pencil color={colors.textSecondary} size={14} />
+              <Text style={styles.customActionText}>Edit</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => confirmDeleteCustomSpot(activeSpot)}
+              hitSlop={8}
+              style={({ pressed }) => [styles.customActionBtn, pressed && styles.pressed]}
+            >
+              <Trash2 color={colors.danger} size={14} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {/* 2. Active MET Weather Warnings */}
       {weatherAlerts.map((alert) => (
@@ -321,7 +677,7 @@ export function WeatherScreen() {
       ))}
 
       {/* 3. Avalanche Forecast Card (Hill Hikes Only) */}
-      {activeRoute.category === 'hill_hike' && avalanche && avColors ? (
+      {activeSpot.showAvalanche && avalanche && avColors ? (
         <View
           style={[
             styles.avalancheCard,
@@ -349,11 +705,11 @@ export function WeatherScreen() {
       ) : null}
 
       {/* 4. Sandnessundbrua Gust Alert */}
-      {bridgeAlert && bridgePeak ? (
+      {bridgeAlert && bridgeSummary ? (
         <Pressable
           onPress={() => {
-            if (activeRoute.id !== 'sandnessundbrua') {
-              selectManualRoute('sandnessundbrua');
+            if (activeSpot.id !== 'kvaloya-bridge') {
+              setSelectedSpotId('kvaloya-bridge');
               setTimeSelectionPinned(false);
             }
           }}
@@ -362,7 +718,8 @@ export function WeatherScreen() {
           <AlertTriangle color={colors.danger} size={22} />
           <View style={styles.alertCopy}>
             <Text style={styles.bridgeTitle}>
-              Sandnessundbrua Gusts {Math.round(bridgePeak.maxGust)} m/s ({bridgePeak.maxTime})
+              Sandnessundbrua Gusts {Math.round(bridgeSummary.peakGustMs)} m/s (
+              {bridgeSummary.peakTime})
             </Text>
             <Text style={styles.bridgeDetail}>
               Exceeds {SANDNESSUNDBRUA_GUST_WARNING_MS} m/s threshold on Kvaløya Bridge.
@@ -372,7 +729,7 @@ export function WeatherScreen() {
       ) : null}
 
       {/* 5. Bottom vs Top Switcher (Hill Hikes) */}
-      {activeRoute.summit ? (
+      {activeSpot.summit ? (
         <View style={styles.dualRow}>
           <Pressable
             onPress={() => setElevation('trailhead')}
@@ -382,9 +739,7 @@ export function WeatherScreen() {
               effectiveElevation === 'trailhead' && styles.dualColSelected,
             ]}
           >
-            <Text style={styles.dualLabel}>
-              BOTTOM ({activeRoute.trailhead.elevationMeters}m)
-            </Text>
+            <Text style={styles.dualLabel}>BOTTOM ({resolvedBottomElevation}m)</Text>
             <Text style={styles.dualTemp}>
               {bottomHourItem ? formatTemperature(bottomHourItem.airTemperatureC) : '—'}
             </Text>
@@ -402,7 +757,7 @@ export function WeatherScreen() {
             ]}
           >
             <Text style={styles.dualLabel}>
-              TOP ({activeRoute.summit.elevationMeters}m)
+              TOP ({activeSpot.summit.elevationMeters}m)
             </Text>
             <Text style={styles.dualTemp}>
               {summitHourItem ? formatTemperature(summitHourItem.airTemperatureC) : '—'}
@@ -414,12 +769,12 @@ export function WeatherScreen() {
         </View>
       ) : null}
 
-      {/* 6. Full 48h Scrollable Forecast */}
+      {/* 6. Full 9-Day Scrollable Forecast (48h hourly + 6h outlook) */}
       {hourlyList.length > 0 ? (
         <View style={styles.timelineSection}>
           <View style={styles.timelineHeaderRow}>
-            <Text style={styles.timelineHeader}>
-              48H FORECAST ({activeTimeLabel || 'NOW'})
+            <Text style={styles.timelineHeader} numberOfLines={1}>
+              9-DAY FORECAST ({activeTimeLabel})
             </Text>
             {activeAssignment?.startTimeLabel ? (
               <Text style={styles.timelineTourTag}>
@@ -427,20 +782,37 @@ export function WeatherScreen() {
               </Text>
             ) : null}
           </View>
+
+          {dateOutsideForecast ? (
+            <View style={styles.rangeNoticeBar}>
+              <Text style={styles.rangeNoticeText}>
+                Selected date ({selectedDateShort}) is outside the 9-day forecast — showing Now.
+              </Text>
+            </View>
+          ) : null}
+
           <ScrollView
             ref={timelineScrollRef}
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.timelineScroll}
+            onContentSizeChange={(w) => {
+              timelineContentWidthRef.current = w;
+              if (pendingScrollIdxRef.current !== null && w > 0) {
+                const idx = pendingScrollIdxRef.current;
+                pendingScrollIdxRef.current = null;
+                requestAnimationFrame(() => {
+                  scrollToCardIndex(idx, false);
+                });
+              }
+            }}
           >
             {hourlyList.map((hourItem, idx) => {
               const isSelected = idx === clampedTimeIndex;
-              const inTour = isForecastHourInTourWindow(
-                hourItem.time,
-                targetDateKey,
-                tourStartMinutes,
-                tourEndMinutes
-              );
+              const inTour =
+                tourStartMinutes !== null &&
+                tourEndMinutes !== null &&
+                isItemOverlappingWindow(hourItem, targetDateKey, tourStartMinutes, tourEndMinutes);
               const d = new Date(hourItem.time);
               const timeString =
                 idx === 0
@@ -457,11 +829,13 @@ export function WeatherScreen() {
                       weekday: 'short',
                     })
                   : null;
+              const is6h = hourItem.stepHours === 6;
 
               return (
                 <Pressable
                   key={hourItem.time}
                   onPress={() => {
+                    pendingScrollIdxRef.current = null;
                     setSelectedTimeIndex(idx);
                     setTimeSelectionPinned(true);
                   }}
@@ -471,20 +845,27 @@ export function WeatherScreen() {
                     isSelected && styles.hourCardSelected,
                   ]}
                 >
-                  {inTour ? <Text style={styles.hourTourBadge}>TOUR</Text> : null}
-                  <Text style={[styles.hourTime, isSelected && styles.hourTimeSelected]}>
+                  {inTour ? (
+                    <Text style={styles.hourTourBadge}>TOUR{is6h ? ' · 6H' : ''}</Text>
+                  ) : is6h ? (
+                    <Text style={styles.hourStepBadge}>6H</Text>
+                  ) : null}
+                  <Text
+                    style={[styles.hourTime, isSelected && styles.hourTimeSelected]}
+                    numberOfLines={1}
+                  >
                     {dayPrefix ? `${dayPrefix} ${timeString}` : timeString}
                   </Text>
                   <WeatherIcon symbolCode={hourItem.symbolCode} size={26} />
                   <Text style={styles.hourTemp}>{Math.round(hourItem.airTemperatureC)}°</Text>
-                  <Text style={styles.hourWind}>
+                  <Text style={styles.hourWind} numberOfLines={1}>
                     {Math.round(hourItem.windSpeedMs)} m/s{' '}
                     {hourItem.windFromDirectionDeg !== null
                       ? windCardinal(hourItem.windFromDirectionDeg)
                       : ''}
                   </Text>
                   {hourItem.precipitationMm > 0 ? (
-                    <Text style={styles.hourRainText}>
+                    <Text style={styles.hourRainText} numberOfLines={1}>
                       {hourItem.precipitationMm.toFixed(1)}mm
                     </Text>
                   ) : null}
@@ -523,9 +904,9 @@ export function WeatherScreen() {
             <View style={styles.badgeFeltCol}>
               <Text style={styles.badgeFeltLabel}>
                 {chillApplies ? 'FELT WIND-CHILL' : 'AIR TEMP'} ·{' '}
-                {effectiveElevation === 'summit' && activeRoute.summit
-                  ? `${activeRoute.summit.elevationMeters}m`
-                  : `${activeRoute.weatherPoint.elevationMeters}m`}
+                {effectiveElevation === 'summit' && activeSpot.summit
+                  ? `${activeSpot.summit.elevationMeters}m`
+                  : `${resolvedBottomElevation}m`}
               </Text>
               <Text style={[styles.badgeFeltVal, { color: exposure.color }]}>
                 {formatTemperature(felt)}
@@ -586,6 +967,159 @@ export function WeatherScreen() {
         </View>
         <Text style={styles.freezingValue}>{freezingValueLabel}</Text>
       </View>
+
+      {/* Add / Edit Custom Weather Point Modal */}
+      <Modal
+        visible={showSpotModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowSpotModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingSpotId ? 'Edit Custom Point' : 'Add Custom Weather Point'}
+              </Text>
+              <Pressable onPress={() => setShowSpotModal(false)} style={styles.modalClose}>
+                <X color={colors.text} size={22} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>LOCATION NAME</Text>
+                <TextInput
+                  value={spotNameInput}
+                  onChangeText={(v) => {
+                    setSpotNameInput(v);
+                    setSpotFormError(null);
+                  }}
+                  placeholder="e.g. Fløya, Ersfjordbotn, Buren"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.textInput}
+                />
+              </View>
+
+              <Pressable
+                onPress={() => void handleUseCurrentGps()}
+                disabled={locatingGps}
+                style={({ pressed }) => [
+                  touchTarget,
+                  styles.gpsBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                {locatingGps ? (
+                  <ActivityIndicator color={colors.ice} size="small" />
+                ) : (
+                  <Crosshair color={colors.ice} size={18} />
+                )}
+                <Text style={styles.gpsBtnText}>
+                  {locatingGps ? 'Reading GPS…' : 'Use Current GPS Location'}
+                </Text>
+              </Pressable>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>QUICK PASTE (COORDS OR GOOGLE MAPS LINK)</Text>
+                <TextInput
+                  value={pasteInput}
+                  onChangeText={handlePasteCoordinates}
+                  placeholder="Paste 69.6492, 18.9553 or Maps URL"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={styles.textInput}
+                />
+              </View>
+
+              <View style={styles.coordRow}>
+                <View style={[styles.fieldGroup, { flex: 1 }]}>
+                  <Text style={styles.fieldLabel}>LATITUDE</Text>
+                  <TextInput
+                    value={latInput}
+                    onChangeText={(v) => {
+                      setLatInput(v);
+                      setSpotFormError(null);
+                    }}
+                    placeholder="69.6492"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="numbers-and-punctuation"
+                    style={styles.textInput}
+                  />
+                </View>
+
+                <View style={[styles.fieldGroup, { flex: 1 }]}>
+                  <Text style={styles.fieldLabel}>LONGITUDE</Text>
+                  <TextInput
+                    value={lonInput}
+                    onChangeText={(v) => {
+                      setLonInput(v);
+                      setSpotFormError(null);
+                    }}
+                    placeholder="18.9553"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="numbers-and-punctuation"
+                    style={styles.textInput}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>ELEVATION IN METERS (OPTIONAL)</Text>
+                <TextInput
+                  value={eleInput}
+                  onChangeText={(v) => {
+                    setEleInput(v);
+                    setSpotFormError(null);
+                  }}
+                  placeholder="Leave blank for automatic terrain elevation"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="numeric"
+                  style={styles.textInput}
+                />
+              </View>
+
+              {spotFormError ? (
+                <Text style={styles.formErrorText}>{spotFormError}</Text>
+              ) : null}
+
+              <View style={styles.modalActions}>
+                {editingSpotId ? (
+                  <Pressable
+                    onPress={() => {
+                      const target = customSpots.find((s) => s.id === editingSpotId);
+                      if (target) confirmDeleteCustomSpot(target);
+                    }}
+                    style={({ pressed }) => [
+                      touchTarget,
+                      styles.deleteModalBtn,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Trash2 color={colors.danger} size={18} />
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => void handleSaveCustomSpot()}
+                  style={({ pressed }) => [
+                    touchTarget,
+                    styles.saveModalBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.saveModalBtnText}>
+                    {editingSpotId ? 'Save Changes' : 'Add Weather Point'}
+                  </Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScrollView>
   );
 }
@@ -602,6 +1136,7 @@ function TwilightRow({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   pillRow: { flexDirection: 'row', gap: 6, paddingVertical: 2 },
   pill: {
+    flexDirection: 'row',
     paddingHorizontal: 14,
     borderRadius: 999,
     backgroundColor: colors.surface,
@@ -611,6 +1146,44 @@ const styles = StyleSheet.create({
   pillSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg },
   pillText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
   pillTextSelected: { color: colors.accentSoft },
+  addPill: {
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.accent,
+  },
+  addPillText: { color: colors.accent, fontSize: 13, fontWeight: '800' },
+  customSpotBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 8,
+  },
+  customSpotInfo: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  customSpotMeta: { color: colors.textSecondary, fontSize: 12, fontWeight: '700', flex: 1 },
+  customSpotActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  customActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  customActionText: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
   metAlertCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -669,30 +1242,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
   },
   timelineHeader: {
     color: colors.textSecondary,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
+    flex: 1,
   },
   timelineTourTag: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
-  timelineScroll: { gap: 8, paddingVertical: 2 },
+  rangeNoticeBar: {
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  rangeNoticeText: { color: colors.ice, fontSize: 11, fontWeight: '700' },
+  timelineScroll: { gap: HOUR_CARD_GAP, paddingVertical: 2, paddingHorizontal: 4 },
   hourCard: {
-    minWidth: 80,
-    minHeight: 106,
+    width: HOUR_CARD_WIDTH,
+    minHeight: 112,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: 12,
-    padding: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 6,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
   },
   hourCardInTour: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg },
-  hourCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentDarkBg, borderWidth: 1.5 },
+  hourCardSelected: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentDarkBg,
+    borderWidth: 1.5,
+  },
   hourTourBadge: { color: colors.accentSoft, fontSize: 9, fontWeight: '800' },
+  hourStepBadge: { color: colors.ice, fontSize: 9, fontWeight: '800' },
   hourTime: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
   hourTimeSelected: { color: colors.accentSoft },
   hourTemp: { color: colors.text, fontSize: 17, fontWeight: '800' },
@@ -730,5 +1320,70 @@ const styles = StyleSheet.create({
   freezingLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
   freezingDetail: { color: colors.textSecondary, fontSize: 11, lineHeight: 15 },
   freezingValue: { color: colors.ice, fontSize: 20, fontWeight: '800' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    maxHeight: '88%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  modalTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  modalClose: { width: 34, height: 34, justifyContent: 'center', alignItems: 'center' },
+  modalBody: { padding: 14, gap: 12, paddingBottom: 28 },
+  fieldGroup: { gap: 5 },
+  fieldLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  textInput: {
+    minHeight: 46,
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  gpsBtn: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+  },
+  gpsBtnText: { color: colors.ice, fontSize: 14, fontWeight: '800' },
+  coordRow: { flexDirection: 'row', gap: 10 },
+  formErrorText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+  modalActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  deleteModalBtn: {
+    width: 52,
+    borderRadius: 12,
+    backgroundColor: colors.dangerDarkBg,
+    borderColor: colors.danger,
+    borderWidth: 1,
+  },
+  saveModalBtn: {
+    flex: 1,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    paddingHorizontal: 16,
+  },
+  saveModalBtnText: { color: colors.background, fontSize: 15, fontWeight: '800' },
   pressed: { opacity: 0.72 },
 });

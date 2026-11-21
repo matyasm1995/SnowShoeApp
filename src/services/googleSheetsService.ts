@@ -13,6 +13,8 @@ const STORAGE_KEY_FONT_LINES = 'cache:schedule_font_lines_v8';
 const STORAGE_KEY_SYNC_TIME = 'cache:schedule_synced_at';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
 
+const RENTAL_CENTER_COL_INDEX = 2; // Column C
+const GUIDES_ON_DUTY_COL_INDEX = 41; // Column AP
 const STAFF_COL_START = 68;
 const STAFF_COL_END = 105;
 const MICHAL_CR_COL_INDEX = 95;
@@ -71,6 +73,7 @@ export interface GuideAssignment {
   commentsList: ThreadedComment[];
   isCharter: boolean;
   rawText: string;
+  sheetColumnHeader: string;
   statusColor: TourColorStatus;
   cellBgHex: string;
   isStrikethrough: boolean;
@@ -82,6 +85,8 @@ export interface DutyStatus {
   type: DutyStatusType;
   title: string;
   detail: string;
+  alsoRentalCenter?: boolean;
+  rentalCenterNote?: string;
 }
 
 export interface UpcomingDayOff {
@@ -528,13 +533,66 @@ function isDayOffMarker(cellLower: string, guideInitialsLower: string): boolean 
   );
 }
 
+function cellContainsInitials(cellValue: unknown, initialsLower: string): boolean {
+  if (!initialsLower) return false;
+  const raw = (cellValue ?? '').toString().trim().toLowerCase();
+  if (!raw) return false;
+  return raw.split(/[^a-z0-9]+/).includes(initialsLower);
+}
+
+function findRentalCenterColIndex(headerRow: string[]): number {
+  const maxScan = Math.min(10, headerRow.length - 1);
+  for (let c = 0; c <= maxScan; c++) {
+    const h = normalizeHeader(headerRow[c]).toLowerCase();
+    if (h.includes('rental center') || h.includes('rental centre')) {
+      return c;
+    }
+  }
+  return RENTAL_CENTER_COL_INDEX;
+}
+
+function findGuidesOnDutyColIndex(headerRow: string[]): number {
+  for (let c = 20; c < Math.min(STAFF_COL_START, headerRow.length); c++) {
+    const h = normalizeHeader(headerRow[c]).toLowerCase();
+    if (h.includes('guides on duty')) {
+      return c;
+    }
+  }
+  return GUIDES_ON_DUTY_COL_INDEX;
+}
+
 export function calculateDutyStatus(
   matrix: string[][],
   targetRowIdx: number,
   profile: GuideProfile,
   assignmentsCount: number
 ): DutyStatus {
+  const hasMatrix = targetRowIdx !== -1 && Array.isArray(matrix) && matrix.length >= 2;
+  const headerRow = hasMatrix ? (matrix[1] || []) : [];
+  const row = hasMatrix ? (matrix[targetRowIdx] || []) : [];
+  const initialsLower = profile.initials.trim().toLowerCase();
+
+  const rentalColIdx = hasMatrix ? findRentalCenterColIndex(headerRow) : RENTAL_CENTER_COL_INDEX;
+  const guidesOnDutyColIdx = hasMatrix
+    ? findGuidesOnDutyColIndex(headerRow)
+    : GUIDES_ON_DUTY_COL_INDEX;
+
+  const rawRentalCell = hasMatrix ? (row[rentalColIdx] || '').toString().trim() : '';
+  const rawGuidesCell = hasMatrix ? (row[guidesOnDutyColIdx] || '').toString().trim() : '';
+
+  const inRentalCenter = hasMatrix && cellContainsInitials(rawRentalCell, initialsLower);
+  const inGuidesOnDuty = hasMatrix && cellContainsInitials(rawGuidesCell, initialsLower);
+
   if (assignmentsCount > 0) {
+    if (inRentalCenter) {
+      return {
+        type: 'tour',
+        title: `${assignmentsCount} Tour${assignmentsCount > 1 ? 's' : ''} + Rental Center`,
+        detail: `Also listed in Rental Center (Col C): "${rawRentalCell}".`,
+        alsoRentalCenter: true,
+        rentalCenterNote: rawRentalCell,
+      };
+    }
     return {
       type: 'tour',
       title: `${assignmentsCount} Tour${assignmentsCount > 1 ? 's' : ''} Assigned`,
@@ -542,7 +600,7 @@ export function calculateDutyStatus(
     };
   }
 
-  if (targetRowIdx === -1 || !matrix || matrix.length < 2) {
+  if (!hasMatrix) {
     return {
       type: 'base',
       title: 'No Tours Scheduled',
@@ -550,7 +608,35 @@ export function calculateDutyStatus(
     };
   }
 
-  const headerRow = matrix[1] || [];
+  // 0-tour days: check Column C (Rental Center) and Column AP (Guides on Duty) first
+  if (inRentalCenter && inGuidesOnDuty) {
+    return {
+      type: 'base',
+      title: 'Rental Center + Guiding (No Tour)',
+      detail: `Listed in Rental Center ("${rawRentalCell}") and Guides on Duty — no tour assigned yet.`,
+      alsoRentalCenter: true,
+      rentalCenterNote: rawRentalCell,
+    };
+  }
+
+  if (inRentalCenter) {
+    return {
+      type: 'base',
+      title: 'Rental Center',
+      detail: `Listed in Rental Center (Col C): "${rawRentalCell}".`,
+      alsoRentalCenter: true,
+      rentalCenterNote: rawRentalCell,
+    };
+  }
+
+  if (inGuidesOnDuty) {
+    return {
+      type: 'base',
+      title: 'Guiding — No Tour Assigned',
+      detail: 'Listed in Guides on Duty (Col AP), with no tour assigned yet.',
+    };
+  }
+
   const nameColIdx = findStaffColumnIndex(headerRow, profile);
 
   if (nameColIdx === -1) {
@@ -559,9 +645,8 @@ export function calculateDutyStatus(
       : { type: 'day_off', title: 'Day Off', detail: 'No tours or shift assigned today.' };
   }
 
-  const rawCell = (matrix[targetRowIdx]?.[nameColIdx] || '').toString().trim();
+  const rawCell = (row[nameColIdx] || '').toString().trim();
   const cellLower = rawCell.toLowerCase();
-  const initialsLower = profile.initials.trim().toLowerCase();
 
   if (cellLower.length === 0) {
     if (profile.contractType === 'full-time') {
@@ -857,6 +942,7 @@ export function parseGuideAssignments(
       commentsList,
       isCharter,
       rawText: cellText.trim(),
+      sheetColumnHeader: headerTitle,
       statusColor,
       cellBgHex: cellBg,
       isStrikethrough,

@@ -6,7 +6,7 @@ export const CONFIG = {
     tabName: 'Winter 2026-27 Nov-MAy',
   },
   weather: {
-    userAgent: 'TOGuides/1.6.0 (https://github.com; guide@tromsooutdoor.no)',
+    userAgent: 'TOGuides/1.7.0 (https://github.com; guide@tromsooutdoor.no)',
     refreshIntervalMs: 30000,
   },
   links: {
@@ -21,7 +21,7 @@ export const CONFIG = {
     defaultMountain: 'tverrfjellet',
   },
   app: {
-    version: '1.6.0',
+    version: '1.7.0',
     name: 'TO Guides',
   },
 } as const;

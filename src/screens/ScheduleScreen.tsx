@@ -42,6 +42,7 @@ import {
   SANDNESSUNDBRUA_POINT,
   type ActivityRoute,
 } from '../data/routes';
+import { routeIdToWeatherSpotId } from '../data/weatherSpots';
 import { useDualForecast } from '../hooks/useDualForecast';
 import {
   avalancheDangerColor,
@@ -56,7 +57,10 @@ import {
   type GuideAssignment,
   type TourColorStatus,
 } from '../services/googleSheetsService';
-import type { HourlyForecastItem } from '../services/weatherService';
+import {
+  summarizeForecastWindow,
+  type ForecastWindowSummary,
+} from '../services/weatherService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 import { windCardinal } from '../utils/environmental';
 import { formatClock, formatTemperature, osloDateKey } from '../utils/format';
@@ -76,70 +80,15 @@ function getOsloMinutes(date: Date): number {
   return h * 60 + m;
 }
 
-function summarizeWindow(
-  hourly: HourlyForecastItem[] | undefined,
-  dateKey: string,
-  startMin: number | null,
-  endMin: number | null
-): {
-  repHour: HourlyForecastItem | null;
-  peakWindMs: number;
-  peakGustMs: number;
-  peakTime: string;
-  dirDeg: number | null;
-} {
-  if (!hourly || hourly.length === 0) {
-    return { repHour: null, peakWindMs: 0, peakGustMs: 0, peakTime: '', dirDeg: null };
+function formatUnavailableWeather(summary: ForecastWindowSummary): string {
+  switch (summary.unavailableReason) {
+    case 'past':
+      return 'Forecast unavailable (past date)';
+    case 'beyond_range':
+      return 'Forecast unavailable (>9 days out)';
+    default:
+      return 'Loading forecast…';
   }
-
-  const winStart = startMin !== null ? startMin - 30 : 0;
-  const winEnd = endMin !== null ? endMin + 30 : 24 * 60;
-  const mid = startMin !== null ? Math.round((startMin + (endMin ?? startMin + 180)) / 2) : null;
-
-  let repHour: HourlyForecastItem | null = null;
-  let bestMidDiff = Infinity;
-  let peakWindMs = 0;
-  let peakGustMs = 0;
-  let peakTime = '';
-  let dirDeg: number | null = null;
-
-  for (const item of hourly) {
-    const d = new Date(item.time);
-    if (Number.isNaN(d.getTime()) || osloDateKey(d) !== dateKey) continue;
-    const m = getOsloMinutes(d);
-    if (m < winStart || m > winEnd) continue;
-
-    if (mid !== null) {
-      const diff = Math.abs(m - mid);
-      if (diff < bestMidDiff) {
-        bestMidDiff = diff;
-        repHour = item;
-      }
-    } else if (!repHour) {
-      repHour = item;
-    }
-
-    const gust = item.windGustMs > 0 ? item.windGustMs : item.windSpeedMs;
-    if (gust >= peakGustMs) {
-      peakGustMs = gust;
-      peakWindMs = item.windSpeedMs;
-      peakTime = formatClock(d);
-      dirDeg = item.windFromDirectionDeg;
-    }
-  }
-
-  if (!repHour) {
-    const first = hourly[0] ?? null;
-    return {
-      repHour: first,
-      peakWindMs: first?.windSpeedMs ?? 0,
-      peakGustMs: first ? (first.windGustMs > 0 ? first.windGustMs : first.windSpeedMs) : 0,
-      peakTime: first ? formatClock(new Date(first.time)) : '',
-      dirDeg: first?.windFromDirectionDeg ?? null,
-    };
-  }
-
-  return { repHour, peakWindMs, peakGustMs, peakTime, dirDeg };
 }
 
 function getStatusBadge(status: TourColorStatus): { label: string; color: string; bg: string } | null {
@@ -236,37 +185,38 @@ export function ScheduleScreen() {
   const endMin = closestAssignment?.endMinutes ?? (homeCategory === 'hill_hike' ? 870 : null);
 
   const tverrSummary = useMemo(
-    () => summarizeWindow(tverrForecast.top?.hourly, dateKey, startMin, endMin),
+    () => summarizeForecastWindow(tverrForecast.top?.hourly, dateKey, startMin, endMin),
     [tverrForecast.top?.hourly, dateKey, startMin, endMin]
   );
 
   const rundSummary = useMemo(
-    () => summarizeWindow(rundForecast.top?.hourly, dateKey, startMin, endMin),
+    () => summarizeForecastWindow(rundForecast.top?.hourly, dateKey, startMin, endMin),
     [rundForecast.top?.hourly, dateKey, startMin, endMin]
   );
 
   const coffeeSummary = useMemo(
-    () => summarizeWindow(coffeeForecast.bottom?.hourly, dateKey, startMin, endMin),
+    () => summarizeForecastWindow(coffeeForecast.bottom?.hourly, dateKey, startMin, endMin),
     [coffeeForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
   const charlSummary = useMemo(
-    () => summarizeWindow(charlForecast.bottom?.hourly, dateKey, startMin, endMin),
+    () => summarizeForecastWindow(charlForecast.bottom?.hourly, dateKey, startMin, endMin),
     [charlForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
   const bridgeSummary = useMemo(
     () =>
-      summarizeWindow(
+      summarizeForecastWindow(
         bridgeForecast.bottom?.hourly,
         dateKey,
-        startMin !== null ? startMin - 60 : null,
-        endMin !== null ? endMin + 60 : null
+        startMin !== null ? Math.max(0, startMin - 60) : null,
+        endMin !== null ? Math.min(24 * 60, endMin + 60) : null
       ),
     [bridgeForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
-  const bridgeAlert = bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
+  const bridgeAlert =
+    bridgeSummary.hasData && bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
 
   const pendingReportData = useMemo(() => {
     const nowMin = getOsloMinutes(new Date());
@@ -322,10 +272,11 @@ export function ScheduleScreen() {
       if (dayTours.length > 0) {
         const first = dayTours[0]!;
         const extra = dayTours.length > 1 ? ` +${dayTours.length - 1}` : '';
+        const rcTag = status.alsoRentalCenter ? ' + RC' : '';
         list.push({
           offset: i,
           dayLabel: label,
-          statusText: `${first.startTimeLabel ?? ''} ${first.tourName.slice(0, 22)}${extra}`.trim(),
+          statusText: `${first.startTimeLabel ?? ''} ${first.tourName.slice(0, 20)}${extra}${rcTag}`.trim(),
           kind: 'tour',
         });
       } else if (status.type === 'day_off') {
@@ -358,14 +309,12 @@ export function ScheduleScreen() {
     }
   };
 
-  const openWeatherForRoute = (routeId: string) => {
-    selectManualRoute(routeId);
-    navigation.navigate('DetailedWeather');
+  const openWeatherForSpot = (spotId: string) => {
+    navigation.navigate('DetailedWeather', { spotId });
   };
 
   const openBridgeDetails = () => {
-    selectManualRoute('sandnessundbrua');
-    navigation.navigate('DetailedWeather');
+    navigation.navigate('DetailedWeather', { spotId: 'kvaloya-bridge' });
   };
 
   const openTour = (idx: number) => {
@@ -490,7 +439,7 @@ export function ScheduleScreen() {
         </Pressable>
       ) : null}
 
-      {/* 5. Duty Status Card ONLY when 0 tours assigned */}
+      {/* 5. Duty Status Card on 0-tour days, or compact Rental Center notice when combined with a tour */}
       {assignments.length === 0 ? (
         <View
           style={[
@@ -515,6 +464,16 @@ export function ScheduleScreen() {
             {dutyStatus.type !== 'day_off' ? (
               <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
             ) : null}
+          </View>
+        </View>
+      ) : dutyStatus.alsoRentalCenter ? (
+        <View style={[styles.dutyCard, styles.dutyCardBase]}>
+          <Briefcase color={colors.warning} size={20} />
+          <View style={styles.dutyTextCol}>
+            <Text style={[styles.dutyTitle, { color: colors.warning }]}>
+              Also Scheduled: Rental Center
+            </Text>
+            <Text style={styles.dutyDetail}>{dutyStatus.detail}</Text>
           </View>
         </View>
       ) : null}
@@ -636,11 +595,16 @@ export function ScheduleScreen() {
       {homeCategory === 'hill_hike' ? (
         <View style={[sharedStyles.card, styles.weatherCheckCard]}>
           <Pressable
-            onPress={() => openWeatherForRoute(activeRoute.id)}
+            onPress={() => openWeatherForSpot(routeIdToWeatherSpotId(activeRoute.id))}
             style={({ pressed }) => [styles.checkHeader, pressed && styles.pressed]}
           >
             <Wind color={colors.ice} size={18} />
-            <Text style={styles.checkTitle}>HILL HIKE · SUMMIT WIND CHECK</Text>
+            <View style={styles.checkTitleCol}>
+              <Text style={styles.checkTitle}>HILL HIKE · SUMMIT WIND CHECK</Text>
+              {tverrSummary.windowLabel ? (
+                <Text style={styles.checkWindowLabel}>{tverrSummary.windowLabel}</Text>
+              ) : null}
+            </View>
             {avalanche && avColors ? (
               <View
                 style={[
@@ -657,47 +621,59 @@ export function ScheduleScreen() {
             )}
           </Pressable>
 
-          <View style={styles.summitRow}>
-            <Pressable
-              onPress={() => openWeatherForRoute('tverrfjellet')}
-              style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
-            >
-              <Text style={styles.summitName}>Tverrfjellet (524m) →</Text>
-              <Text style={styles.summitWind}>
-                {tverrSummary.peakWindMs > 0
-                  ? `${tverrSummary.peakWindMs.toFixed(1)} m/s ${
-                      tverrSummary.dirDeg !== null ? windCardinal(tverrSummary.dirDeg) : ''
-                    }`
-                  : '—'}
-              </Text>
-              <Text style={styles.summitGust}>
-                Gust {Math.round(tverrSummary.peakGustMs)} m/s ·{' '}
-                {tverrSummary.repHour
-                  ? formatTemperature(tverrSummary.repHour.airTemperatureC)
-                  : '—'}
-              </Text>
-            </Pressable>
+          {!tverrSummary.hasData && !rundSummary.hasData ? (
+            <Text style={styles.weatherUnavailableText}>
+              {formatUnavailableWeather(tverrSummary)}
+            </Text>
+          ) : (
+            <View style={styles.summitRow}>
+              <Pressable
+                onPress={() => openWeatherForSpot('tverrfjellet')}
+                style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
+              >
+                <Text style={styles.summitName}>Tverrfjellet (524m) →</Text>
+                <Text style={styles.summitWind}>
+                  {tverrSummary.hasData
+                    ? `${tverrSummary.peakWindMs.toFixed(1)} m/s ${
+                        tverrSummary.dirDeg !== null ? windCardinal(tverrSummary.dirDeg) : ''
+                      }`
+                    : '—'}
+                </Text>
+                <Text style={styles.summitGust}>
+                  {tverrSummary.hasData
+                    ? `Gust ${Math.round(tverrSummary.peakGustMs)} m/s · ${
+                        tverrSummary.repHour
+                          ? formatTemperature(tverrSummary.repHour.airTemperatureC)
+                          : '—'
+                      }`
+                    : formatUnavailableWeather(tverrSummary)}
+                </Text>
+              </Pressable>
 
-            <Pressable
-              onPress={() => openWeatherForRoute('rundfjellet')}
-              style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
-            >
-              <Text style={styles.summitName}>Rundfjellet (472m) →</Text>
-              <Text style={styles.summitWind}>
-                {rundSummary.peakWindMs > 0
-                  ? `${rundSummary.peakWindMs.toFixed(1)} m/s ${
-                      rundSummary.dirDeg !== null ? windCardinal(rundSummary.dirDeg) : ''
-                    }`
-                  : '—'}
-              </Text>
-              <Text style={styles.summitGust}>
-                Gust {Math.round(rundSummary.peakGustMs)} m/s ·{' '}
-                {rundSummary.repHour
-                  ? formatTemperature(rundSummary.repHour.airTemperatureC)
-                  : '—'}
-              </Text>
-            </Pressable>
-          </View>
+              <Pressable
+                onPress={() => openWeatherForSpot('rundfjellet')}
+                style={({ pressed }) => [styles.summitBox, pressed && styles.pressed]}
+              >
+                <Text style={styles.summitName}>Rundfjellet (472m) →</Text>
+                <Text style={styles.summitWind}>
+                  {rundSummary.hasData
+                    ? `${rundSummary.peakWindMs.toFixed(1)} m/s ${
+                        rundSummary.dirDeg !== null ? windCardinal(rundSummary.dirDeg) : ''
+                      }`
+                    : '—'}
+                </Text>
+                <Text style={styles.summitGust}>
+                  {rundSummary.hasData
+                    ? `Gust ${Math.round(rundSummary.peakGustMs)} m/s · ${
+                        rundSummary.repHour
+                          ? formatTemperature(rundSummary.repHour.airTemperatureC)
+                          : '—'
+                      }`
+                    : formatUnavailableWeather(rundSummary)}
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           <Pressable
             onPress={openBridgeDetails}
@@ -708,35 +684,48 @@ export function ScheduleScreen() {
             ]}
           >
             <Text style={[styles.bridgeText, bridgeAlert && { color: '#FCA5A5' }]}>
-              {bridgeAlert
-                ? `⚠️ Sandnessundbrua gusts ${Math.round(bridgeSummary.peakGustMs)} m/s (${bridgeSummary.peakTime}) — Tap for details`
-                : `Sandnessundbrua: max gust ${Math.round(bridgeSummary.peakGustMs)} m/s — Tap for details`}
+              {!bridgeSummary.hasData
+                ? `Sandnessundbrua: ${formatUnavailableWeather(bridgeSummary)}`
+                : bridgeAlert
+                  ? `⚠️ Sandnessundbrua gusts ${Math.round(bridgeSummary.peakGustMs)} m/s (${bridgeSummary.peakTime}) — Tap for details`
+                  : `Sandnessundbrua: max gust ${Math.round(bridgeSummary.peakGustMs)} m/s — Tap for details`}
             </Text>
           </Pressable>
         </View>
       ) : homeCategory === 'coffee_snowshoe' ? (
         <View style={[sharedStyles.card, styles.weatherCheckCard]}>
           <Pressable
-            onPress={() => openWeatherForRoute('coffee-malangen')}
+            onPress={() => openWeatherForSpot('coffee-hike')}
             style={({ pressed }) => [styles.weatherTapArea, pressed && styles.pressed]}
           >
             <View style={styles.checkHeader}>
               <WeatherIcon symbolCode={coffeeSummary.repHour?.symbolCode ?? null} size={22} />
-              <Text style={styles.checkTitle}>MALANGEN · TOVE’S TRADISJONSMAT</Text>
+              <View style={styles.checkTitleCol}>
+                <Text style={styles.checkTitle}>COFFEE HIKE · MALANGEN</Text>
+                {coffeeSummary.windowLabel ? (
+                  <Text style={styles.checkWindowLabel}>{coffeeSummary.windowLabel}</Text>
+                ) : null}
+              </View>
               <Text style={styles.weatherLinkHint}>Forecast →</Text>
             </View>
-            <View style={styles.singleSummaryRow}>
-              <Text style={styles.singleSummaryTemp}>
-                {coffeeSummary.repHour
-                  ? formatTemperature(coffeeSummary.repHour.airTemperatureC)
-                  : '—'}
+            {coffeeSummary.hasData ? (
+              <View style={styles.singleSummaryRow}>
+                <Text style={styles.singleSummaryTemp}>
+                  {coffeeSummary.repHour
+                    ? formatTemperature(coffeeSummary.repHour.airTemperatureC)
+                    : '—'}
+                </Text>
+                <Text style={styles.singleSummaryWind}>
+                  Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
+                  {coffeeSummary.dirDeg !== null ? windCardinal(coffeeSummary.dirDeg) : ''} · Gust{' '}
+                  {Math.round(coffeeSummary.peakGustMs)} m/s
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.weatherUnavailableText}>
+                {formatUnavailableWeather(coffeeSummary)}
               </Text>
-              <Text style={styles.singleSummaryWind}>
-                Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
-                {coffeeSummary.dirDeg !== null ? windCardinal(coffeeSummary.dirDeg) : ''} · Gust{' '}
-                {Math.round(coffeeSummary.peakGustMs)} m/s
-              </Text>
-            </View>
+            )}
           </Pressable>
 
           <Pressable
@@ -748,15 +737,17 @@ export function ScheduleScreen() {
             ]}
           >
             <Text style={[styles.bridgeText, bridgeAlert && { color: '#FCA5A5' }]}>
-              {bridgeAlert
-                ? `⚠️ Sandnessundbrua gusts ${Math.round(bridgeSummary.peakGustMs)} m/s (${bridgeSummary.peakTime}) — Tap for details`
-                : `Sandnessundbrua: max gust ${Math.round(bridgeSummary.peakGustMs)} m/s — Tap for details`}
+              {!bridgeSummary.hasData
+                ? `Sandnessundbrua: ${formatUnavailableWeather(bridgeSummary)}`
+                : bridgeAlert
+                  ? `⚠️ Sandnessundbrua gusts ${Math.round(bridgeSummary.peakGustMs)} m/s (${bridgeSummary.peakTime}) — Tap for details`
+                  : `Sandnessundbrua: max gust ${Math.round(bridgeSummary.peakGustMs)} m/s — Tap for details`}
             </Text>
           </Pressable>
         </View>
       ) : (
         <Pressable
-          onPress={() => openWeatherForRoute('snowshoe-charlottenlund')}
+          onPress={() => openWeatherForSpot('charlottenlund')}
           style={({ pressed }) => [
             sharedStyles.card,
             styles.weatherCheckCard,
@@ -765,21 +756,32 @@ export function ScheduleScreen() {
         >
           <View style={styles.checkHeader}>
             <WeatherIcon symbolCode={charlSummary.repHour?.symbolCode ?? null} size={22} />
-            <Text style={styles.checkTitle}>CHARLOTTENLUND · TRAIL WEATHER</Text>
+            <View style={styles.checkTitleCol}>
+              <Text style={styles.checkTitle}>CHARLOTTENLUND · TRAIL WEATHER</Text>
+              {charlSummary.windowLabel ? (
+                <Text style={styles.checkWindowLabel}>{charlSummary.windowLabel}</Text>
+              ) : null}
+            </View>
             <Text style={styles.weatherLinkHint}>Forecast →</Text>
           </View>
-          <View style={styles.singleSummaryRow}>
-            <Text style={styles.singleSummaryTemp}>
-              {charlSummary.repHour
-                ? formatTemperature(charlSummary.repHour.airTemperatureC)
-                : '—'}
+          {charlSummary.hasData ? (
+            <View style={styles.singleSummaryRow}>
+              <Text style={styles.singleSummaryTemp}>
+                {charlSummary.repHour
+                  ? formatTemperature(charlSummary.repHour.airTemperatureC)
+                  : '—'}
+              </Text>
+              <Text style={styles.singleSummaryWind}>
+                Wind {charlSummary.peakWindMs.toFixed(1)} m/s{' '}
+                {charlSummary.dirDeg !== null ? windCardinal(charlSummary.dirDeg) : ''} · Gust{' '}
+                {Math.round(charlSummary.peakGustMs)} m/s
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.weatherUnavailableText}>
+              {formatUnavailableWeather(charlSummary)}
             </Text>
-            <Text style={styles.singleSummaryWind}>
-              Wind {charlSummary.peakWindMs.toFixed(1)} m/s{' '}
-              {charlSummary.dirDeg !== null ? windCardinal(charlSummary.dirDeg) : ''} · Gust{' '}
-              {Math.round(charlSummary.peakGustMs)} m/s
-            </Text>
-          </View>
+          )}
         </Pressable>
       )}
 
@@ -1124,7 +1126,10 @@ const styles = StyleSheet.create({
   weatherCheckCard: { gap: 10, padding: 12 },
   weatherTapArea: { gap: 10 },
   checkHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  checkTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, flex: 1 },
+  checkTitleCol: { flex: 1, gap: 1 },
+  checkTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  checkWindowLabel: { color: colors.accentSoft, fontSize: 11, fontWeight: '700' },
+  weatherUnavailableText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700', paddingVertical: 2 },
   weatherLinkHint: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   avBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   avBadgeText: { fontSize: 10, fontWeight: '800' },

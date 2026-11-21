@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { CONFIG } from '../config';
-import type { GeoPoint } from '../data/routes';
+import type { WeatherPoint } from '../data/weatherSpots';
 import { osloDateKey } from '../utils/format';
 import { loadJson, saveJson } from './persistence';
 
@@ -113,7 +113,7 @@ interface RawMetAlertFeature {
 }
 
 export async function fetchWeatherAlerts(
-  point: GeoPoint,
+  point: WeatherPoint,
   targetDate: Date = new Date()
 ): Promise<WeatherAlertItem[]> {
   if (await isPreviewAlertsEnabled()) {

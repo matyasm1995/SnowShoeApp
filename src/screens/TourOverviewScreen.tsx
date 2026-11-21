@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  FileText,
   MapPin,
   MessageSquare,
   Mountain,
@@ -40,6 +41,7 @@ import {
   SANDNESSUNDBRUA_GUST_WARNING_MS,
   SANDNESSUNDBRUA_POINT,
 } from '../data/routes';
+import { routeIdToWeatherSpotId } from '../data/weatherSpots';
 import { useChecklist } from '../hooks/useChecklist';
 import { useDualForecast } from '../hooks/useDualForecast';
 import { useRoster } from '../hooks/useRoster';
@@ -50,7 +52,7 @@ import {
   type AvalancheWarning,
   type WeatherAlertItem,
 } from '../services/alertsService';
-import type { HourlyForecastItem } from '../services/weatherService';
+import { summarizeForecastWindow } from '../services/weatherService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 import {
   calculateWindChill,
@@ -64,7 +66,7 @@ import { formatClock, formatTemperature, osloDateKey } from '../utils/format';
 export type ScheduleStackParamList = {
   ScheduleHome: undefined;
   TourOverview: undefined;
-  DetailedWeather: undefined;
+  DetailedWeather: { spotId?: string } | undefined;
   Tracking: undefined;
 };
 
@@ -82,64 +84,6 @@ function getOsloMinutes(date: Date): number {
   return h * 60 + m;
 }
 
-function pickForecastForTourWindow(
-  hourly: HourlyForecastItem[] | undefined,
-  dateKey: string,
-  startMin: number | null,
-  endMin: number | null
-): HourlyForecastItem | null {
-  if (!hourly || hourly.length === 0) return null;
-  if (startMin === null) return hourly[0] ?? null;
-
-  const end = endMin ?? startMin + 180;
-  const mid = Math.round((startMin + end) / 2);
-
-  let best: HourlyForecastItem | null = null;
-  let bestDiff = Infinity;
-
-  for (const item of hourly) {
-    const d = new Date(item.time);
-    if (Number.isNaN(d.getTime()) || osloDateKey(d) !== dateKey) continue;
-    const m = getOsloMinutes(d);
-    const diff = Math.abs(m - mid);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = item;
-    }
-  }
-
-  return best ?? hourly[0] ?? null;
-}
-
-function peakBridgeGustInWindow(
-  hourly: HourlyForecastItem[] | undefined,
-  dateKey: string,
-  startMin: number | null,
-  endMin: number | null
-): { maxGustMs: number; peakTime: string } | null {
-  if (!hourly || hourly.length === 0) return null;
-
-  const winStart = startMin !== null ? startMin - 60 : 0;
-  const winEnd = endMin !== null ? endMin + 60 : 24 * 60;
-
-  let maxGustMs = 0;
-  let peakTime = '';
-
-  for (const item of hourly) {
-    const d = new Date(item.time);
-    if (Number.isNaN(d.getTime()) || osloDateKey(d) !== dateKey) continue;
-    const m = getOsloMinutes(d);
-    if (m < winStart || m > winEnd) continue;
-    const gust = item.windGustMs > 0 ? item.windGustMs : item.windSpeedMs;
-    if (gust > maxGustMs) {
-      maxGustMs = gust;
-      peakTime = formatClock(d);
-    }
-  }
-
-  return maxGustMs > 0 ? { maxGustMs, peakTime } : null;
-}
-
 export function TourOverviewScreen() {
   const navigation = useNavigation<NavProp>();
   const {
@@ -152,7 +96,6 @@ export function TourOverviewScreen() {
     submittedReports,
     refreshReports,
     setHillHikeMountain,
-    selectManualRoute,
   } = useActiveTour();
 
   const isHillHike =
@@ -172,7 +115,7 @@ export function TourOverviewScreen() {
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
-  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [showSheetDetailsModal, setShowSheetDetailsModal] = useState(false);
 
   const [editingKit, setEditingKit] = useState(false);
   const [newItemText, setNewItemText] = useState('');
@@ -210,33 +153,52 @@ export function TourOverviewScreen() {
     return getOsloMinutes(new Date()) >= endMin;
   }, [dateKey, endMin]);
 
-  const bottomWeather = useMemo(
-    () => pickForecastForTourWindow(dualForecast.bottom?.hourly, dateKey, startMin, endMin),
+  const bottomSummary = useMemo(
+    () => summarizeForecastWindow(dualForecast.bottom?.hourly, dateKey, startMin, endMin),
     [dualForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
-  const topWeather = useMemo(
-    () => pickForecastForTourWindow(dualForecast.top?.hourly, dateKey, startMin, endMin),
+  const topSummary = useMemo(
+    () => summarizeForecastWindow(dualForecast.top?.hourly, dateKey, startMin, endMin),
     [dualForecast.top?.hourly, dateKey, startMin, endMin]
   );
 
-  const tverrTopWindow = useMemo(
-    () => pickForecastForTourWindow(tverrTopForecast.bottom?.hourly, dateKey, startMin, endMin),
+  const tverrTopSummary = useMemo(
+    () => summarizeForecastWindow(tverrTopForecast.bottom?.hourly, dateKey, startMin, endMin),
     [tverrTopForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
-  const rundTopWindow = useMemo(
-    () => pickForecastForTourWindow(rundTopForecast.bottom?.hourly, dateKey, startMin, endMin),
+  const rundTopSummary = useMemo(
+    () => summarizeForecastWindow(rundTopForecast.bottom?.hourly, dateKey, startMin, endMin),
     [rundTopForecast.bottom?.hourly, dateKey, startMin, endMin]
   );
 
-  const bridgePeak = useMemo(() => {
+  const bridgeSummary = useMemo(() => {
     if (!activeRoute.usesBridgeWarning) return null;
-    return peakBridgeGustInWindow(bridgeForecast.bottom?.hourly, dateKey, startMin, endMin);
+    return summarizeForecastWindow(
+      bridgeForecast.bottom?.hourly,
+      dateKey,
+      startMin !== null ? Math.max(0, startMin - 60) : null,
+      endMin !== null ? Math.min(24 * 60, endMin + 60) : null
+    );
   }, [activeRoute.usesBridgeWarning, bridgeForecast.bottom?.hourly, dateKey, startMin, endMin]);
 
+  const bottomWeather = bottomSummary.repHour;
+  const topWeather = topSummary.repHour;
+  const tverrTopWindow = tverrTopSummary.repHour;
+  const rundTopWindow = rundTopSummary.repHour;
+
   const bridgeAlert =
-    bridgePeak !== null && bridgePeak.maxGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
+    bridgeSummary !== null &&
+    bridgeSummary.hasData &&
+    bridgeSummary.peakGustMs >= SANDNESSUNDBRUA_GUST_WARNING_MS;
+
+  const weatherUnavailableText =
+    bottomSummary.unavailableReason === 'past'
+      ? 'Forecast unavailable (past date)'
+      : bottomSummary.unavailableReason === 'beyond_range'
+        ? 'Forecast unavailable (>9 days out)'
+        : 'Loading forecast…';
 
   const primaryWeather = topWeather ?? bottomWeather;
   const feltChill = primaryWeather
@@ -299,8 +261,7 @@ export function TourOverviewScreen() {
   };
 
   const openBridgeWeather = () => {
-    selectManualRoute('sandnessundbrua');
-    navigation.navigate('DetailedWeather');
+    navigation.navigate('DetailedWeather', { spotId: 'kvaloya-bridge' });
   };
 
   const handleAddChecklistItem = () => {
@@ -380,15 +341,23 @@ export function TourOverviewScreen() {
         <Text style={styles.returnNote}>{activeRoute.returnNote}</Text>
 
         {activeAssignment?.cellNote ? (
-          <View style={styles.noteBox}>
-            <Text style={styles.noteLabel}>NOTE</Text>
-            <Text style={styles.noteText}>{activeAssignment.cellNote}</Text>
-          </View>
+          <Pressable
+            onPress={() => setShowSheetDetailsModal(true)}
+            style={({ pressed }) => [styles.noteBox, pressed && styles.pressed]}
+          >
+            <View style={styles.commentHeader}>
+              <Text style={styles.noteLabel}>NOTE</Text>
+              <Text style={styles.readFullHint}>Sheet Details →</Text>
+            </View>
+            <Text style={styles.noteText} numberOfLines={3}>
+              {activeAssignment.cellNote}
+            </Text>
+          </Pressable>
         ) : null}
 
         {activeAssignment && activeAssignment.commentsList.length > 0 ? (
           <Pressable
-            onPress={() => setShowCommentsModal(true)}
+            onPress={() => setShowSheetDetailsModal(true)}
             style={({ pressed }) => [styles.noteBox, pressed && styles.pressed]}
           >
             <View style={styles.commentHeader}>
@@ -402,6 +371,22 @@ export function TourOverviewScreen() {
                 {c.content}
               </Text>
             ))}
+          </Pressable>
+        ) : null}
+
+        {activeAssignment ? (
+          <Pressable
+            onPress={() => setShowSheetDetailsModal(true)}
+            style={({ pressed }) => [styles.sheetCellBar, pressed && styles.pressed]}
+          >
+            <FileText color={colors.ice} size={15} />
+            <View style={styles.sheetCellCopy}>
+              <Text style={styles.sheetCellLabel}>SHEET DETAILS · RAW CELL</Text>
+              <Text style={styles.sheetCellPreview} numberOfLines={1}>
+                {activeAssignment.rawText || '(Empty cell)'}
+              </Text>
+            </View>
+            <Text style={styles.readFullHint}>Inspect →</Text>
           </Pressable>
         ) : null}
       </View>
@@ -620,7 +605,7 @@ export function TourOverviewScreen() {
         </View>
       ))}
 
-      {bridgeAlert && bridgePeak ? (
+      {bridgeAlert && bridgeSummary ? (
         <Pressable
           onPress={openBridgeWeather}
           style={({ pressed }) => [styles.bridgeAlert, pressed && styles.pressed]}
@@ -628,7 +613,8 @@ export function TourOverviewScreen() {
           <AlertTriangle color={colors.danger} size={22} />
           <View style={styles.alertCopy}>
             <Text style={styles.bridgeTitle}>
-              Kvaløya Bridge Gusts {Math.round(bridgePeak.maxGustMs)} m/s ({bridgePeak.peakTime})
+              Kvaløya Bridge Gusts {Math.round(bridgeSummary.peakGustMs)} m/s (
+              {bridgeSummary.peakTime})
             </Text>
             <Text style={styles.bridgeDetail}>
               Tap to view detailed Sandnessundbrua bridge forecast →
@@ -660,15 +646,24 @@ export function TourOverviewScreen() {
 
       {/* 7. Full Tour Window Weather Card */}
       <Pressable
-        onPress={() => navigation.navigate('DetailedWeather')}
+        onPress={() =>
+          navigation.navigate('DetailedWeather', {
+            spotId: routeIdToWeatherSpotId(activeRoute.id),
+          })
+        }
         style={({ pressed }) => [sharedStyles.card, styles.weatherStrip, pressed && styles.pressed]}
       >
         <View style={styles.weatherStripTop}>
-          <Text style={styles.sectionMiniLabel}>TOUR WINDOW WEATHER</Text>
+          <Text style={styles.sectionMiniLabel}>
+            TOUR WINDOW WEATHER
+            {bottomSummary.windowLabel ? ` · ${bottomSummary.windowLabel.toUpperCase()}` : ''}
+          </Text>
           <Text style={styles.linkText}>Full Forecast →</Text>
         </View>
 
-        {activeRoute.summit ? (
+        {!bottomSummary.hasData ? (
+          <Text style={styles.weatherUnavailable}>{weatherUnavailableText}</Text>
+        ) : activeRoute.summit ? (
           <View style={styles.dualMiniRow}>
             <View style={styles.dualMiniCol}>
               <Text style={styles.dualMiniTitle}>
@@ -695,17 +690,19 @@ export function TourOverviewScreen() {
             <Text style={styles.singleWeatherLine}>
               {bottomWeather
                 ? `${formatTemperature(bottomWeather.airTemperatureC)} · Wind ${bottomWeather.windSpeedMs.toFixed(1)} m/s`
-                : 'Loading forecast…'}
+                : weatherUnavailableText}
             </Text>
           </View>
         )}
 
         <View style={styles.weatherStripFooter}>
-          {risk && feltChill !== null ? (
+          {bottomSummary.hasData && risk && feltChill !== null ? (
             <Text style={[styles.feltPill, { color: risk.color }]}>
               Felt {formatTemperature(feltChill)} · {risk.label}
             </Text>
-          ) : null}
+          ) : (
+            <View />
+          )}
           <Text style={styles.daylightMini}>
             Dusk {formatClock(daylight.clocks.civilDusk)}
           </Text>
@@ -835,49 +832,66 @@ export function TourOverviewScreen() {
         );
       })}
 
-      {/* Full Office Comments Modal */}
+      {/* Combined Sheet Details Modal (Raw Cell + Note + Office Comments) */}
       <Modal
-        visible={showCommentsModal}
+        visible={showSheetDetailsModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowCommentsModal(false)}
+        onRequestClose={() => setShowSheetDetailsModal(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Full Office Comments</Text>
+              <Text style={styles.modalTitle}>Sheet Details</Text>
               <Pressable
-                onPress={() => setShowCommentsModal(false)}
+                onPress={() => setShowSheetDetailsModal(false)}
                 style={styles.modalClose}
               >
                 <X color={colors.text} size={22} />
               </Pressable>
             </View>
             <ScrollView contentContainerStyle={styles.modalBody}>
-              {activeAssignment?.rawText ? (
+              {activeAssignment ? (
                 <View style={styles.fullCommentCard}>
-                  <Text style={styles.fullCommentAuthor}>Schedule Cell</Text>
+                  <Text style={styles.fullCommentAuthor}>
+                    Schedule Cell
+                    {activeAssignment.sheetColumnHeader
+                      ? ` · ${activeAssignment.sheetColumnHeader}`
+                      : ''}
+                  </Text>
                   <Text style={styles.fullCommentText} selectable>
-                    {activeAssignment.rawText}
+                    {activeAssignment.rawText || '(Empty cell)'}
                   </Text>
                 </View>
               ) : null}
-              {activeAssignment?.commentsList.map((c, idx) => (
-                <View key={idx} style={styles.fullCommentCard}>
-                  <Text style={styles.fullCommentAuthor}>{c.author}</Text>
+
+              {activeAssignment?.cellNote ? (
+                <View style={styles.fullCommentCard}>
+                  <Text style={styles.fullCommentAuthor}>Cell Note</Text>
                   <Text style={styles.fullCommentText} selectable>
-                    {c.content}
+                    {activeAssignment.cellNote}
                   </Text>
-                  {c.replies.map((r, rIdx) => (
-                    <View key={rIdx} style={styles.fullReplyBox}>
-                      <Text style={styles.fullReplyAuthor}>{r.author || 'Reply'}:</Text>
-                      <Text style={styles.fullCommentText} selectable>
-                        {r.content}
-                      </Text>
-                    </View>
-                  ))}
                 </View>
-              ))}
+              ) : null}
+
+              {activeAssignment && activeAssignment.commentsList.length > 0 ? (
+                activeAssignment.commentsList.map((c, idx) => (
+                  <View key={idx} style={styles.fullCommentCard}>
+                    <Text style={styles.fullCommentAuthor}>Comment · {c.author}</Text>
+                    <Text style={styles.fullCommentText} selectable>
+                      {c.content}
+                    </Text>
+                    {c.replies.map((r, rIdx) => (
+                      <View key={rIdx} style={styles.fullReplyBox}>
+                        <Text style={styles.fullReplyAuthor}>{r.author || 'Reply'}:</Text>
+                        <Text style={styles.fullCommentText} selectable>
+                          {r.content}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ))
+              ) : null}
             </ScrollView>
           </View>
         </View>
@@ -976,6 +990,20 @@ const styles = StyleSheet.create({
   noteLabel: { color: colors.accentSoft, fontSize: 10, fontWeight: '800', flex: 1 },
   readFullHint: { color: colors.accent, fontSize: 11, fontWeight: '800' },
   noteText: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  sheetCellBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  sheetCellCopy: { flex: 1, gap: 1 },
+  sheetCellLabel: { color: colors.ice, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  sheetCellPreview: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
   contactsCard: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -1101,7 +1129,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  sectionMiniLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800' },
+  sectionMiniLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '800', flex: 1 },
+  weatherUnavailable: { color: colors.textSecondary, fontSize: 13, fontWeight: '700', paddingVertical: 4 },
   linkText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   dualMiniRow: { flexDirection: 'row', gap: 8 },
   dualMiniCol: {

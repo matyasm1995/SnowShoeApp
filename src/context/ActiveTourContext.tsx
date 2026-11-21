@@ -303,6 +303,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       tomorrowDate: tomorrow,
       tomorrowAssignments: tmrAssignments,
       tomorrowDuty: tmrDuty,
+      syncedAtIso: syncData.syncedAt,
     });
   }, [syncData, profile, needsSetup]);
 

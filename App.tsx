@@ -1,4 +1,5 @@
 import './src/services/backgroundTracking';
+import './src/services/backgroundScheduleSync';
 
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FloatingTrackingBubble } from './src/components/FloatingTrackingBubble';
 import { ActiveTourProvider, useActiveTour } from './src/context/ActiveTourContext';
@@ -39,6 +40,7 @@ import {
 import { TrackingScreen } from './src/screens/TrackingScreen';
 import { WeatherScreen } from './src/screens/WeatherScreen';
 import { WelcomeSetupScreen } from './src/screens/WelcomeSetupScreen';
+import { registerBackgroundScheduleSync } from './src/services/backgroundScheduleSync';
 import { colors } from './src/theme';
 
 export type RootTabParamList = {
@@ -128,6 +130,9 @@ function ScheduleStackNavigator() {
 }
 
 function MainTabsNavigator() {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 8);
+
   return (
     <Tab.Navigator
       initialRouteName="Schedule"
@@ -143,13 +148,16 @@ function MainTabsNavigator() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 60,
+          height: 62 + bottomInset,
+          paddingTop: 6,
+          paddingBottom: bottomInset,
         },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textSecondary,
         tabBarLabelStyle: {
-          fontSize: 10,
+          fontSize: 11,
           fontWeight: '800',
+          marginTop: 2,
         },
         tabBarHideOnKeyboard: true,
       }}
@@ -160,7 +168,7 @@ function MainTabsNavigator() {
         options={{
           headerShown: false,
           tabBarLabel: 'Schedule',
-          tabBarIcon: ({ color, size }) => <CalendarSync color={color} size={size} />,
+          tabBarIcon: ({ color }) => <CalendarSync color={color} size={25} />,
         }}
       />
       <Tab.Screen
@@ -169,7 +177,7 @@ function MainTabsNavigator() {
         options={{
           title: 'Weather & Forecast',
           tabBarLabel: 'Weather',
-          tabBarIcon: ({ color, size }) => <CloudSun color={color} size={size} />,
+          tabBarIcon: ({ color }) => <CloudSun color={color} size={25} />,
         }}
       />
       <Tab.Screen
@@ -178,7 +186,7 @@ function MainTabsNavigator() {
         options={{
           title: 'Operations & Roster',
           tabBarLabel: 'Roster',
-          tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
+          tabBarIcon: ({ color }) => <Users color={color} size={25} />,
         }}
       />
       <Tab.Screen
@@ -187,7 +195,7 @@ function MainTabsNavigator() {
         options={{
           title: 'Field Guide',
           tabBarLabel: 'Guide',
-          tabBarIcon: ({ color, size }) => <BookOpen color={color} size={size} />,
+          tabBarIcon: ({ color }) => <BookOpen color={color} size={25} />,
         }}
       />
       <Tab.Screen
@@ -196,7 +204,7 @@ function MainTabsNavigator() {
         options={{
           title: 'Preferences',
           tabBarLabel: 'Settings',
-          tabBarIcon: ({ color, size }) => <Settings color={color} size={size} />,
+          tabBarIcon: ({ color }) => <Settings color={color} size={25} />,
         }}
       />
     </Tab.Navigator>
@@ -243,6 +251,12 @@ function AppShell() {
 
     return () => sub.remove();
   }, []);
+
+  useEffect(() => {
+    if (setupChecked && !needsSetup) {
+      void registerBackgroundScheduleSync();
+    }
+  }, [setupChecked, needsSetup]);
 
   if (!setupChecked) {
     return (

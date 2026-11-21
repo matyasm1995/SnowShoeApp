@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { GeoPoint } from '../data/routes';
+import type { WeatherPoint } from '../data/weatherSpots';
 import { fetchForecast, type ForecastResult } from '../services/weatherService';
 
 interface DualForecastState {
@@ -12,8 +12,8 @@ interface DualForecastState {
 }
 
 export function useDualForecast(
-  bottomPoint: GeoPoint,
-  topPoint: GeoPoint | null
+  bottomPoint: WeatherPoint,
+  topPoint: WeatherPoint | null
 ): DualForecastState {
   const [bottom, setBottom] = useState<ForecastResult | null>(null);
   const [top, setTop] = useState<ForecastResult | null>(null);
