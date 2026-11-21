@@ -2,14 +2,20 @@ module.exports = {
   expo: {
     name: "TO Guides",
     slug: "arctic-snowshoe-guide",
-    version: "1.6.0",
+    version: "1.6.1",
     orientation: "portrait",
     userInterfaceStyle: "dark",
     backgroundColor: "#0B0D10",
     icon: "./assets/icon.png",
+    updates: {
+      url: "https://u.expo.dev/32601f54-1560-4dec-b95d-5b658b010900"
+    },
+    runtimeVersion: {
+      policy: "appVersion"
+    },
     android: {
       package: "com.toguides.app",
-      versionCode: 4,
+      versionCode: 6,
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#0B0D10"
@@ -26,6 +32,15 @@ module.exports = {
     },
     plugins: [
       [
+        "expo-build-properties",
+        {
+          android: {
+            compileSdkVersion: 36,
+            targetSdkVersion: 36
+          }
+        }
+      ],
+      [
         "expo-location",
         {
           locationAlwaysAndWhenInUsePermission:
@@ -36,17 +51,7 @@ module.exports = {
           isAndroidForegroundServiceEnabled: true
         }
       ],
-      "expo-notifications",
-      [
-        "expo-build-properties",
-        {
-          android: {
-            compileSdkVersion: 36,
-            targetSdkVersion: 36,
-            buildToolsVersion: "36.0.0"
-          }
-        }
-      ]
+      "expo-notifications"
     ],
     extra: {
       eas: {

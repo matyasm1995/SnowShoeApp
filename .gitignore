@@ -17,3 +17,5 @@ ios/
 *.tsbuildinfo
 .idea/
 .vscode/
+AGENTS.md
+TODO.md
