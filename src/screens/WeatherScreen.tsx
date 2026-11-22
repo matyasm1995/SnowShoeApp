@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react-native';
 
+import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
 import { WindCompass } from '../components/WindCompass';
 import { CONFIG } from '../config';
@@ -47,6 +48,7 @@ import {
 } from '../data/weatherSpots';
 import { useDualForecast } from '../hooks/useDualForecast';
 import {
+  alertSeverityColors,
   avalancheDangerColor,
   fetchTromsoAvalanche,
   fetchWeatherAlerts,
@@ -121,6 +123,7 @@ export function WeatherScreen() {
   const [timeSelectionPinned, setTimeSelectionPinned] = useState<boolean>(false);
   const [now, setNow] = useState(() => new Date());
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
+  const [selectedAlert, setSelectedAlert] = useState<WeatherAlertItem | null>(null);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
 
   // Add/Edit custom weather point modal state
@@ -657,24 +660,39 @@ export function WeatherScreen() {
         </View>
       ) : null}
 
-      {/* 2. Active MET Weather Warnings */}
-      {weatherAlerts.map((alert) => (
-        <View key={alert.id} style={styles.metAlertCard}>
-          <AlertTriangle color={colors.warning} size={18} />
-          <View style={styles.alertCopy}>
-            <Text style={styles.metAlertTitle}>
-              {alert.event} ({alert.severity})
-            </Text>
-            {alert.validRangeLabel ? (
-              <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
-            ) : null}
-            <Text style={styles.alertDetailText}>{alert.headline}</Text>
-            {alert.instruction ? (
-              <Text style={styles.metAlertInst}>{alert.instruction}</Text>
-            ) : null}
-          </View>
-        </View>
-      ))}
+      {/* 2. Active MET / Yr Weather Warnings (Clickable) */}
+      {weatherAlerts.map((alert) => {
+        const palette = alertSeverityColors(alert.riskColor);
+        return (
+          <Pressable
+            key={alert.id}
+            onPress={() => setSelectedAlert(alert)}
+            style={({ pressed }) => [
+              styles.metAlertCard,
+              { backgroundColor: palette.bg, borderColor: palette.color },
+              pressed && styles.pressed,
+            ]}
+          >
+            <AlertTriangle color={palette.color} size={18} />
+            <View style={styles.alertCopy}>
+              <View style={styles.alertTopRow}>
+                <Text style={[styles.metAlertTitle, { color: palette.color }]} numberOfLines={1}>
+                  {alert.event} ({alert.severity})
+                </Text>
+                <Text style={[styles.alertDetailsHint, { color: palette.color }]}>
+                  Details →
+                </Text>
+              </View>
+              {alert.validRangeLabel ? (
+                <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
+              ) : null}
+              <Text style={styles.alertDetailText} numberOfLines={2}>
+                {alert.headline}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
 
       {/* 3. Avalanche Forecast Card (Hill Hikes Only) */}
       {activeSpot.showAvalanche && avalanche && avColors ? (
@@ -1120,6 +1138,11 @@ export function WeatherScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <WeatherAlertModal
+        alert={selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+      />
     </ScrollView>
   );
 }
@@ -1195,7 +1218,9 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   alertCopy: { flex: 1, gap: 2 },
-  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800', flex: 1 },
+  alertDetailsHint: { fontSize: 11, fontWeight: '800' },
   alertRangeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
   alertDetailText: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   metAlertInst: { color: colors.textMuted, fontSize: 11, marginTop: 2 },

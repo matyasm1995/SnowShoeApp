@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 
@@ -13,17 +14,25 @@ import { scheduleTomorrowDispatchNotification } from './notificationService';
 
 export const BACKGROUND_SCHEDULE_SYNC_TASK = 'arctic-guide-background-schedule-sync';
 
-const PRE_DISPATCH_MIN_AGE_MS = 25 * 60 * 1000; // 25 min during 15:00–20:59 Oslo time
-const DAYTIME_MIN_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours during 07:00–14:59 Oslo time
-const BACKGROUND_FETCH_INTERVAL_SEC = 30 * 60; // 30 min minimum interval
+const STORAGE_KEY_BG_SYNC_REG_VER = 'pref:bg_sync_reg_version';
+const CURRENT_BG_SYNC_REG_VER = 'v2_15m';
 
-function getOsloHour(date: Date): number {
+const PEAK_DISPATCH_MIN_AGE_MS = 12 * 60 * 1000; // 12 min during 17:30–19:00 Oslo time
+const AFTERNOON_MIN_AGE_MS = 25 * 60 * 1000; // 25 min during 15:00–17:29 Oslo time
+const EVENING_MIN_AGE_MS = 45 * 60 * 1000; // 45 min during 19:01–20:59 Oslo time
+const DAYTIME_MIN_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours during 07:00–14:59 Oslo time
+const BACKGROUND_FETCH_INTERVAL_SEC = 15 * 60; // 15 min minimum interval (Android shortest)
+
+function getOsloMinutesOfDay(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Oslo',
     hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   }).formatToParts(date);
-  return parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const minute = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+  return hour * 60 + minute;
 }
 
 if (!TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
@@ -35,10 +44,10 @@ if (!TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
       }
 
       const now = new Date();
-      const osloHour = getOsloHour(now);
+      const osloMin = getOsloMinutesOfDay(now);
 
       // Skip overnight (21:00–06:59 Oslo time) to save battery & Apps Script quota
-      if (osloHour < 7 || osloHour >= 21) {
+      if (osloMin < 7 * 60 || osloMin >= 21 * 60) {
         return BackgroundFetch.BackgroundFetchResult.NoData;
       }
 
@@ -46,7 +55,15 @@ if (!TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
       const lastSyncMs = cached?.syncedAt ? Date.parse(cached.syncedAt) : 0;
       const ageMs = Number.isFinite(lastSyncMs) ? Date.now() - lastSyncMs : Infinity;
 
-      const minAgeMs = osloHour >= 15 ? PRE_DISPATCH_MIN_AGE_MS : DAYTIME_MIN_AGE_MS;
+      let minAgeMs = DAYTIME_MIN_AGE_MS;
+      if (osloMin >= 17 * 60 + 30 && osloMin <= 19 * 60) {
+        minAgeMs = PEAK_DISPATCH_MIN_AGE_MS;
+      } else if (osloMin >= 15 * 60 && osloMin < 17 * 60 + 30) {
+        minAgeMs = AFTERNOON_MIN_AGE_MS;
+      } else if (osloMin > 19 * 60) {
+        minAgeMs = EVENING_MIN_AGE_MS;
+      }
+
       if (ageMs < minAgeMs) {
         return BackgroundFetch.BackgroundFetchResult.NoData;
       }
@@ -95,11 +112,19 @@ export async function registerBackgroundScheduleSync(): Promise<void> {
       return;
     }
 
-    const alreadyRegistered = await TaskManager.isTaskRegisteredAsync(
-      BACKGROUND_SCHEDULE_SYNC_TASK
-    );
-    if (alreadyRegistered) {
+    const [alreadyRegistered, regVer] = await Promise.all([
+      TaskManager.isTaskRegisteredAsync(BACKGROUND_SCHEDULE_SYNC_TASK),
+      AsyncStorage.getItem(STORAGE_KEY_BG_SYNC_REG_VER),
+    ]);
+
+    if (alreadyRegistered && regVer === CURRENT_BG_SYNC_REG_VER) {
       return;
+    }
+
+    if (alreadyRegistered) {
+      try {
+        await BackgroundFetch.unregisterTaskAsync(BACKGROUND_SCHEDULE_SYNC_TASK);
+      } catch {}
     }
 
     await BackgroundFetch.registerTaskAsync(BACKGROUND_SCHEDULE_SYNC_TASK, {
@@ -107,6 +132,7 @@ export async function registerBackgroundScheduleSync(): Promise<void> {
       stopOnTerminate: false,
       startOnBoot: true,
     });
+    await AsyncStorage.setItem(STORAGE_KEY_BG_SYNC_REG_VER, CURRENT_BG_SYNC_REG_VER);
   } catch {
     // Ignore in unsupported environments (e.g. Expo Go without background fetch)
   }

@@ -10,8 +10,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AlertTriangle, Building2, Check, Clock } from 'lucide-react-native';
+import { AlertTriangle, BookOpen, Building2, Check, ChevronRight, Clock } from 'lucide-react-native';
 
+import { GuideManualModal } from '../components/GuideManualModal';
 import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
 import {
@@ -32,6 +33,7 @@ export function SettingsScreen() {
   const [defaultMountain, setDefaultMountain] = useState<string>(CONFIG.defaults.defaultMountain);
   const [previewAlerts, setPreviewAlerts] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showManual, setShowManual] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -244,7 +246,26 @@ export function SettingsScreen() {
         />
       </View>
 
-      {/* 6. App & Integration Info */}
+      {/* 6. Offline Guide Manual */}
+      <Pressable
+        onPress={() => setShowManual(true)}
+        style={({ pressed }) => [
+          sharedStyles.card,
+          styles.manualBtn,
+          pressed && styles.pressed,
+        ]}
+      >
+        <BookOpen color={colors.accent} size={20} />
+        <View style={styles.contractTextCol}>
+          <Text style={styles.previewTitle}>Guide Manual & Features</Text>
+          <Text style={styles.previewSub}>
+            Offline onboarding guide, status colors, GPS pacing & tips
+          </Text>
+        </View>
+        <ChevronRight color={colors.textSecondary} size={20} />
+      </Pressable>
+
+      {/* 7. App & Integration Info */}
       <View style={styles.infoCard}>
         <Text style={styles.infoTitle}>
           {CONFIG.app.name} v{CONFIG.app.version}
@@ -253,6 +274,8 @@ export function SettingsScreen() {
         <Text style={styles.infoLine}>• Mode: Offline-First AsyncStorage</Text>
         <Text style={styles.infoLine}>• Weather API: MET Norway Locationforecast 2.0</Text>
       </View>
+
+      <GuideManualModal visible={showManual} onClose={() => setShowManual(false)} />
     </ScrollView>
   );
 }
@@ -311,6 +334,11 @@ const styles = StyleSheet.create({
   },
   saveBtnText: { color: colors.background, fontSize: 18, fontWeight: '800' },
   previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  manualBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,

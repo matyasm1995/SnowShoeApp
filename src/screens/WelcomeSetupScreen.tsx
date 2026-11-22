@@ -12,8 +12,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Building2, Check, Clock, Compass } from 'lucide-react-native';
+import { BookOpen, Building2, Check, Clock, Compass } from 'lucide-react-native';
 
+import { GuideManualModal } from '../components/GuideManualModal';
 import { useActiveTour } from '../context/ActiveTourContext';
 import type { ContractType } from '../services/googleSheetsService';
 import { colors, sharedStyles, touchTarget } from '../theme';
@@ -27,6 +28,7 @@ export function WelcomeSetupScreen() {
     'tverrfjellet'
   );
   const [saving, setSaving] = useState(false);
+  const [showManual, setShowManual] = useState(false);
 
   const handleContinue = async () => {
     const cleanInitials = initials.trim();
@@ -230,7 +232,16 @@ export function WelcomeSetupScreen() {
             </>
           )}
         </Pressable>
+        <Pressable
+          onPress={() => setShowManual(true)}
+          style={({ pressed }) => [styles.manualLinkBtn, pressed && styles.pressed]}
+        >
+          <BookOpen color={colors.accentSoft} size={16} />
+          <Text style={styles.manualLinkText}>New guide? Read App Manual</Text>
+        </Pressable>
       </ScrollView>
+
+      <GuideManualModal visible={showManual} onClose={() => setShowManual(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -331,6 +342,18 @@ const styles = StyleSheet.create({
     color: colors.background,
     fontSize: 18,
     fontWeight: '900',
+  },
+  manualLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+  },
+  manualLinkText: {
+    color: colors.accentSoft,
+    fontSize: 14,
+    fontWeight: '700',
   },
   pressed: { opacity: 0.78 },
 });

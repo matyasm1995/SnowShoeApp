@@ -12,15 +12,46 @@ const TROMSO_REGION_ID = 3011;
 const REQUEST_TIMEOUT_MS = 10000;
 const STORAGE_KEY_PREVIEW_ALERTS = 'pref:preview_alerts_v1';
 
+export type AlertRiskColor = 'yellow' | 'orange' | 'red' | 'info';
+
 export interface WeatherAlertItem {
   id: string;
   event: string;
   severity: string;
+  riskColor: AlertRiskColor;
   headline: string;
+  area?: string;
+  description?: string;
+  consequences?: string;
   instruction?: string;
+  webUrl?: string;
   validFromIso: string;
   validToIso: string;
   validRangeLabel: string;
+}
+
+export function alertSeverityColors(riskColor: AlertRiskColor | undefined): {
+  color: string;
+  bg: string;
+} {
+  switch (riskColor) {
+    case 'red':
+      return { color: '#EF4444', bg: '#3B0D0D' };
+    case 'orange':
+      return { color: '#FB923C', bg: '#2E1508' };
+    case 'yellow':
+      return { color: '#FACC15', bg: '#2C2208' };
+    default:
+      return { color: '#38BDF8', bg: '#0E2433' };
+  }
+}
+
+function classifyAlertRiskColor(rawColor?: string, rawSeverity?: string): AlertRiskColor {
+  const combined = `${rawColor ?? ''} ${rawSeverity ?? ''}`.toLowerCase();
+  if (combined.includes('red') || combined.includes('extreme')) return 'red';
+  if (combined.includes('orange') || combined.includes('severe')) return 'orange';
+  if (combined.includes('yellow') || combined.includes('moderate')) return 'yellow';
+  return 'yellow';
 }
 
 export interface AvalancheWarning {
@@ -105,8 +136,10 @@ interface RawMetAlertFeature {
     title?: string;
     name?: string;
     description?: string;
+    consequences?: string;
     instruction?: string;
     area?: string;
+    web?: string;
     validFrom?: string;
     validTo?: string;
   };
@@ -122,8 +155,16 @@ export async function fetchWeatherAlerts(
         id: 'preview-gale-1',
         event: 'Gale Warning (Preview)',
         severity: 'Yellow · Moderate',
+        riskColor: 'yellow',
         headline: 'Parts of Troms, Finnmark and Vesterålen',
-        instruction: 'Strong ENE gusts 20–24 m/s on Kvaløya ridges.',
+        area: 'Kvaløya & Tromsø',
+        description:
+          '[Preview Mode] Strong east-northeast gale force gusts 20–24 m/s expected on exposed mountain ridges and bridges.',
+        consequences:
+          'Blowing snow and reduced visibility above treeline. Challenging crosswinds on Sandnessundbrua.',
+        instruction:
+          'Consider sheltered forest routes or Rundfjellet lower slopes; monitor Sandnessundbrua gusts before departure.',
+        webUrl: 'https://www.yr.no/en/warnings',
         validFromIso: new Date().toISOString(),
         validToIso: new Date(Date.now() + 86400000).toISOString(),
         validRangeLabel: 'Active today',
@@ -131,7 +172,7 @@ export async function fetchWeatherAlerts(
     ];
   }
 
-  const key = `alerts:met:v2:${point.latitude.toFixed(2)}:${point.longitude.toFixed(2)}`;
+  const key = `alerts:met:v3:${point.latitude.toFixed(2)}:${point.longitude.toFixed(2)}`;
   const params = new URLSearchParams({
     lat: point.latitude.toFixed(4),
     lon: point.longitude.toFixed(4),
@@ -181,6 +222,7 @@ export async function fetchWeatherAlerts(
 
       const event = p.eventAwarenessName || p.event || 'Weather Warning';
       const severity = p.riskMatrixColor || p.severity || 'Advisory';
+      const riskColor = classifyAlertRiskColor(p.riskMatrixColor, p.severity);
       const rawText = p.title || p.name || p.area || p.description || event;
       const headline = cleanMetAlertHeadline(rawText);
 
@@ -188,14 +230,27 @@ export async function fetchWeatherAlerts(
         id: f.id || p.id || `alert-${idx}`,
         event,
         severity,
+        riskColor,
         headline,
         validFromIso: fromIso,
         validToIso: toIso,
         validRangeLabel: formatCleanAlertRange(fromIso, toIso),
       };
 
+      if (p.area) {
+        item.area = cleanMetAlertHeadline(p.area);
+      }
+      if (p.description) {
+        item.description = cleanMetAlertHeadline(p.description);
+      }
+      if (p.consequences) {
+        item.consequences = cleanMetAlertHeadline(p.consequences);
+      }
       if (p.instruction) {
         item.instruction = cleanMetAlertHeadline(p.instruction);
+      }
+      if (p.web) {
+        item.webUrl = p.web.trim();
       }
 
       items.push(item);

@@ -33,6 +33,7 @@ import {
 } from 'lucide-react-native';
 
 import { TripReportModal } from '../components/TripReportModal';
+import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
 import { useActiveTour } from '../context/ActiveTourContext';
 import {
@@ -45,6 +46,7 @@ import {
 import { routeIdToWeatherSpotId } from '../data/weatherSpots';
 import { useDualForecast } from '../hooks/useDualForecast';
 import {
+  alertSeverityColors,
   avalancheDangerColor,
   fetchTromsoAvalanche,
   fetchWeatherAlerts,
@@ -53,7 +55,9 @@ import {
 } from '../services/alertsService';
 import {
   calculateDutyStatus,
+  parseCompanyDayOperations,
   parseGuideAssignments,
+  type CompanyDayTour,
   type GuideAssignment,
   type TourColorStatus,
 } from '../services/googleSheetsService';
@@ -127,10 +131,13 @@ export function ScheduleScreen() {
     refreshReports,
   } = useActiveTour();
 
+  const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const [showAllRoutes, setShowAllRoutes] = useState(false);
   const [showNextMonth, setShowNextMonth] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
+  const [selectedAlert, setSelectedAlert] = useState<WeatherAlertItem | null>(null);
+  const [inspectedCompanyTour, setInspectedCompanyTour] = useState<CompanyDayTour | null>(null);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
 
   const [directReport, setDirectReport] = useState<{
@@ -289,6 +296,21 @@ export function ScheduleScreen() {
     return list;
   }, [syncData, profile]);
 
+  const companyOps = useMemo(() => {
+    if (!syncData) {
+      return { tours: [] as CompanyDayTour[], vehicles: [], rentalCenterRaw: '', guidesOnDutyRaw: '' };
+    }
+    return parseCompanyDayOperations(
+      syncData.values,
+      syncData.notes,
+      syncData.comments,
+      syncData.backgrounds,
+      syncData.fontLines,
+      profile.initials,
+      selectedDate
+    );
+  }, [syncData, profile.initials, selectedDate]);
+
   const companyTrips = useMemo(
     () => ROUTE_CATALOG.filter((r) => r.category !== 'bridge'),
     []
@@ -395,6 +417,196 @@ export function ScheduleScreen() {
         </Pressable>
       </View>
 
+      {/* 2b. My Schedule / All Trips Segmented Toggle (My Schedule always first) */}
+      <View style={styles.viewToggleRow}>
+        <Pressable
+          onPress={() => setViewMode('mine')}
+          style={[
+            styles.viewToggleBtn,
+            viewMode === 'mine' && styles.viewToggleBtnActive,
+          ]}
+        >
+          <Text
+            style={[
+              styles.viewToggleText,
+              viewMode === 'mine' && styles.viewToggleTextActive,
+            ]}
+          >
+            My Schedule{assignments.length > 0 ? ` (${assignments.length})` : ''}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => setViewMode('all')}
+          style={[
+            styles.viewToggleBtn,
+            viewMode === 'all' && styles.viewToggleBtnActive,
+          ]}
+        >
+          <Text
+            style={[
+              styles.viewToggleText,
+              viewMode === 'all' && styles.viewToggleTextActive,
+            ]}
+          >
+            All Trips ({companyOps.tours.length})
+          </Text>
+        </Pressable>
+      </View>
+
+      {viewMode === 'all' ? (
+        <View style={styles.allTripsWrap}>
+          {/* Vehicles Summary */}
+          {companyOps.vehicles.length > 0 ? (
+            <View style={[sharedStyles.card, styles.opsSummaryCard]}>
+              <View style={styles.opsHeaderRow}>
+                <Bus color={colors.accent} size={16} />
+                <Text style={styles.opsHeaderTitle}>VEHICLES ASSIGNED ({dateLabel.toUpperCase()})</Text>
+              </View>
+              {companyOps.vehicles.map((v) => (
+                <View key={v.vehicle} style={styles.vehicleSummaryRow}>
+                  <Text style={styles.vehicleSummaryName}>{v.vehicle}</Text>
+                  <Text style={styles.vehicleSummaryDetail}>{v.summary}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {/* Rental Center & Guides on Duty */}
+          {companyOps.rentalCenterRaw || companyOps.guidesOnDutyRaw ? (
+            <View style={[sharedStyles.card, styles.opsSummaryCard]}>
+              {companyOps.rentalCenterRaw ? (
+                <View style={styles.vehicleSummaryRow}>
+                  <Text style={styles.vehicleSummaryName}>Rental Center</Text>
+                  <Text style={styles.vehicleSummaryDetail}>{companyOps.rentalCenterRaw}</Text>
+                </View>
+              ) : null}
+              {companyOps.guidesOnDutyRaw ? (
+                <View style={styles.vehicleSummaryRow}>
+                  <Text style={styles.vehicleSummaryName}>Guides on Duty</Text>
+                  <Text style={styles.vehicleSummaryDetail}>{companyOps.guidesOnDutyRaw}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          <Text style={sharedStyles.sectionTitle}>
+            All Company Trips ({companyOps.tours.length})
+          </Text>
+
+          {companyOps.tours.length === 0 ? (
+            <View style={[sharedStyles.card, styles.emptyAllCard]}>
+              <Text style={sharedStyles.secondary}>
+                {syncData
+                  ? 'No active company tours found in the sheet for this date.'
+                  : 'Sync schedule to view all company trips.'}
+              </Text>
+            </View>
+          ) : (
+            companyOps.tours.map((ct) => {
+              const statusBadge = getStatusBadge(ct.statusColor);
+              return (
+                <Pressable
+                  key={ct.id}
+                  onPress={() => setInspectedCompanyTour(ct)}
+                  style={({ pressed }) => [
+                    styles.tourCard,
+                    ct.isMine && styles.tourCardMine,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.tourHeader}>
+                    <Text style={styles.tourTag}>
+                      {ct.isCharter ? 'CHARTER' : 'TOUR'}
+                      {ct.startTimeLabel
+                        ? ` · ${ct.startTimeLabel}${ct.endTimeLabel ? `–${ct.endTimeLabel}` : ''}`
+                        : ''}
+                    </Text>
+                    <View style={styles.badgesRow}>
+                      {ct.isMine ? (
+                        <View style={styles.mineBadge}>
+                          <Text style={styles.mineBadgeText}>YOUR TOUR</Text>
+                        </View>
+                      ) : null}
+                      {statusBadge ? (
+                        <View
+                          style={[
+                            styles.statusColorBadge,
+                            { backgroundColor: statusBadge.bg, borderColor: statusBadge.color },
+                          ]}
+                        >
+                          <Text style={[styles.statusColorText, { color: statusBadge.color }]}>
+                            {statusBadge.label}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {ct.shipName ? (
+                        <View style={styles.shipBadge}>
+                          <Ship color={colors.ice} size={12} />
+                          <Text style={styles.shipText}>{ct.shipName}</Text>
+                        </View>
+                      ) : null}
+                      {ct.vehicle ? (
+                        <View style={styles.vehicleBadge}>
+                          <Bus color={colors.accentSoft} size={12} />
+                          <Text style={styles.vehicleText}>{ct.vehicle}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+
+                  <Text style={styles.tourTitle}>{ct.tourName}</Text>
+
+                  <View style={styles.allGuidesRow}>
+                    <Text style={styles.allGuidesLabel}>Guides:</Text>
+                    {ct.assignedGuides.length > 0 ? (
+                      ct.assignedGuides.map((g, gIdx) => (
+                        <View
+                          key={`${ct.id}-g-${gIdx}`}
+                          style={[
+                            styles.guidePill,
+                            g.toLowerCase() === profile.initials.trim().toLowerCase() &&
+                              styles.guidePillMine,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.guidePillText,
+                              g.toLowerCase() === profile.initials.trim().toLowerCase() &&
+                                styles.guidePillTextMine,
+                            ]}
+                          >
+                            {g}
+                          </Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.allGuidesFallback} numberOfLines={1}>
+                        {ct.rawText}
+                      </Text>
+                    )}
+                  </View>
+
+                  <View style={styles.tourFooter}>
+                    <View style={styles.paxChip}>
+                      <Users color={colors.accent} size={15} />
+                      <Text style={styles.paxText}>
+                        {ct.guestCount > 0 ? `${ct.guestCount} pax` : 'Open'}
+                      </Text>
+                    </View>
+                    {ct.commentsList.length > 0 || ct.cellNote ? (
+                      <MessageSquare color={colors.ice} size={15} />
+                    ) : null}
+                    <Text style={styles.openHint}>Details →</Text>
+                  </View>
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+      ) : (
+        <>
+
       {/* 3. Clickable Manager Notices Bar */}
       {managerNotes.length > 0 ? (
         <Pressable
@@ -478,21 +690,39 @@ export function ScheduleScreen() {
         </View>
       ) : null}
 
-      {/* 6. Active MET Weather Warnings (Filtered to selected date) */}
-      {weatherAlerts.map((alert) => (
-        <View key={alert.id} style={styles.alertBanner}>
-          <AlertTriangle color={colors.warning} size={18} />
-          <View style={styles.alertCopy}>
-            <Text style={styles.alertTitle}>
-              {alert.event} ({alert.severity})
-            </Text>
-            {alert.validRangeLabel ? (
-              <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
-            ) : null}
-            <Text style={styles.alertDetail}>{alert.headline}</Text>
-          </View>
-        </View>
-      ))}
+      {/* 6. Active MET / Yr Weather Warnings (Clickable, filtered to selected date) */}
+      {weatherAlerts.map((alert) => {
+        const palette = alertSeverityColors(alert.riskColor);
+        return (
+          <Pressable
+            key={alert.id}
+            onPress={() => setSelectedAlert(alert)}
+            style={({ pressed }) => [
+              styles.alertBanner,
+              { backgroundColor: palette.bg, borderColor: palette.color },
+              pressed && styles.pressed,
+            ]}
+          >
+            <AlertTriangle color={palette.color} size={18} />
+            <View style={styles.alertCopy}>
+              <View style={styles.alertTopRow}>
+                <Text style={[styles.alertTitle, { color: palette.color }]} numberOfLines={1}>
+                  {alert.event} ({alert.severity})
+                </Text>
+                <Text style={[styles.alertDetailsHint, { color: palette.color }]}>
+                  Details →
+                </Text>
+              </View>
+              {alert.validRangeLabel ? (
+                <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
+              ) : null}
+              <Text style={styles.alertDetail} numberOfLines={2}>
+                {alert.headline}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
 
       {/* 7. YOUR TOURS */}
       {assignments.length > 0 ? (
@@ -868,6 +1098,8 @@ export function ScheduleScreen() {
           ))}
         </View>
       ) : null}
+        </>
+      )}
 
       {/* Manager Noticeboard Full-Text Modal */}
       <Modal
@@ -944,6 +1176,91 @@ export function ScheduleScreen() {
           }}
         />
       ) : null}
+      {/* Company Tour Read-Only Sheet Details Modal (All Trips View) */}
+      <Modal
+        visible={inspectedCompanyTour !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setInspectedCompanyTour(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {inspectedCompanyTour?.tourName ?? 'Tour Details'}
+              </Text>
+              <Pressable
+                onPress={() => setInspectedCompanyTour(null)}
+                style={styles.modalClose}
+              >
+                <X color={colors.text} size={22} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalBody}>
+              {inspectedCompanyTour ? (
+                <>
+                  <View style={styles.companyDetailCard}>
+                    <Text style={styles.companyDetailLabel}>
+                      SCHEDULE CELL
+                      {inspectedCompanyTour.sheetColumnHeader
+                        ? ` · ${inspectedCompanyTour.sheetColumnHeader.toUpperCase()}`
+                        : ''}
+                    </Text>
+                    <Text style={styles.companyDetailText} selectable>
+                      {inspectedCompanyTour.rawText}
+                    </Text>
+                  </View>
+
+                  {inspectedCompanyTour.vehicle || inspectedCompanyTour.meetingPoint ? (
+                    <View style={styles.companyDetailCard}>
+                      <Text style={styles.companyDetailLabel}>LOGISTICS</Text>
+                      {inspectedCompanyTour.vehicle ? (
+                        <Text style={styles.companyDetailText}>
+                          Vehicle: {inspectedCompanyTour.vehicle}
+                        </Text>
+                      ) : null}
+                      {inspectedCompanyTour.meetingPoint ? (
+                        <Text style={styles.companyDetailText}>
+                          Meeting Point: {inspectedCompanyTour.meetingPoint}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  {inspectedCompanyTour.cellNote ? (
+                    <View style={styles.companyDetailCard}>
+                      <Text style={styles.companyDetailLabel}>CELL NOTE</Text>
+                      <Text style={styles.companyDetailText} selectable>
+                        {inspectedCompanyTour.cellNote}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {inspectedCompanyTour.commentsList.map((c, idx) => (
+                    <View key={idx} style={styles.companyDetailCard}>
+                      <Text style={styles.companyDetailLabel}>COMMENT · {c.author}</Text>
+                      <Text style={styles.companyDetailText} selectable>
+                        {c.content}
+                      </Text>
+                      {c.replies.map((r, rIdx) => (
+                        <Text key={rIdx} style={styles.companyReplyText} selectable>
+                          {r.author || 'Reply'}: {r.content}
+                        </Text>
+                      ))}
+                    </View>
+                  ))}
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <WeatherAlertModal
+        alert={selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+      />
     </ScrollView>
   );
 }
@@ -992,6 +1309,112 @@ const styles = StyleSheet.create({
   dateCenter: { alignItems: 'center', paddingVertical: 4 },
   dateLabelText: { color: colors.text, fontSize: 16, fontWeight: '800' },
   todayTap: { color: colors.accent, fontSize: 10, fontWeight: '800' },
+  viewToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 3,
+    gap: 4,
+  },
+  viewToggleBtn: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  viewToggleBtnActive: {
+    backgroundColor: colors.accent,
+  },
+  viewToggleText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  viewToggleTextActive: {
+    color: colors.background,
+  },
+  allTripsWrap: { gap: 10 },
+  opsSummaryCard: { gap: 6, padding: 12 },
+  opsHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  opsHeaderTitle: {
+    color: colors.accentSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  vehicleSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderTopColor: colors.borderSubtle,
+    borderTopWidth: 1,
+    paddingTop: 5,
+  },
+  vehicleSummaryName: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  vehicleSummaryDetail: {
+    color: colors.ice,
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+    textAlign: 'right',
+  },
+  emptyAllCard: { padding: 14, alignItems: 'center' },
+  tourCardMine: { borderColor: colors.accent },
+  mineBadge: {
+    backgroundColor: colors.accentDarkBg,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  mineBadgeText: { color: colors.accentSoft, fontSize: 9, fontWeight: '900' },
+  allGuidesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  allGuidesLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  guidePill: {
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  guidePillMine: {
+    backgroundColor: colors.accentDarkBg,
+    borderColor: colors.accent,
+  },
+  guidePillText: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  guidePillTextMine: { color: colors.accentSoft },
+  allGuidesFallback: { color: colors.textSecondary, fontSize: 12, flex: 1 },
+  companyDetailCard: {
+    backgroundColor: '#0E1116',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  companyDetailLabel: { color: colors.accentSoft, fontSize: 10, fontWeight: '800' },
+  companyDetailText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  companyReplyText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    paddingTop: 4,
+    marginTop: 4,
+  },
   noticePill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1041,7 +1464,9 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   alertCopy: { flex: 1, gap: 2 },
-  alertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  alertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800', flex: 1 },
+  alertDetailsHint: { fontSize: 11, fontWeight: '800' },
   alertRangeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
   alertDetail: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   tourCard: {

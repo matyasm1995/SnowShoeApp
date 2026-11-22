@@ -33,6 +33,7 @@ import {
 } from 'lucide-react-native';
 
 import { TripReportModal } from '../components/TripReportModal';
+import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
 import { useActiveTour } from '../context/ActiveTourContext';
 import { matchContactsForTour } from '../data/contacts';
@@ -46,6 +47,7 @@ import { useChecklist } from '../hooks/useChecklist';
 import { useDualForecast } from '../hooks/useDualForecast';
 import { useRoster } from '../hooks/useRoster';
 import {
+  alertSeverityColors,
   avalancheDangerColor,
   fetchTromsoAvalanche,
   fetchWeatherAlerts,
@@ -113,6 +115,7 @@ export function TourOverviewScreen() {
   const roster = useRoster(tourKey);
 
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
+  const [selectedAlert, setSelectedAlert] = useState<WeatherAlertItem | null>(null);
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showSheetDetailsModal, setShowSheetDetailsModal] = useState(false);
@@ -278,6 +281,66 @@ export function TourOverviewScreen() {
   };
 
   const avColors = avalanche ? avalancheDangerColor(avalanche.dangerLevel) : null;
+  const showReportAtTop = Boolean(activeAssignment && tourEnded && !reportRecord);
+
+  const renderPostTripReportButton = () => {
+    if (!activeAssignment) return null;
+    return (
+      <Pressable
+        onPress={() => setShowReportModal(true)}
+        style={({ pressed }) => [
+          touchTarget,
+          styles.reportBtn,
+          reportRecord
+            ? styles.reportBtnDone
+            : tourEnded
+              ? styles.reportBtnNeeded
+              : styles.reportBtnDefault,
+          pressed && styles.pressed,
+        ]}
+      >
+        {reportRecord ? (
+          <CheckCircle2 color={colors.success} size={22} />
+        ) : (
+          <ClipboardList
+            color={tourEnded ? colors.background : colors.accent}
+            size={22}
+          />
+        )}
+        <View style={styles.reportCopy}>
+          <Text
+            style={[
+              styles.reportTitle,
+              reportRecord && { color: colors.success },
+              !reportRecord && tourEnded && { color: colors.background },
+            ]}
+          >
+            {reportRecord
+              ? `Report Submitted (${formatClock(new Date(reportRecord.submittedAtIso))})`
+              : tourEnded
+                ? 'Post-Trip Report Needed'
+                : 'Post-Trip Report'}
+          </Text>
+          <Text
+            style={[
+              styles.reportSub,
+              !reportRecord && tourEnded && { color: colors.background, opacity: 0.85 },
+            ]}
+          >
+            {reportRecord
+              ? reportRecord.queuedOffline
+                ? 'Saved offline · Will sync when online · Tap to edit'
+                : `Submitted (${reportRecord.attendedPax} joined) · Tap to edit`
+              : 'Pre-filled with guide, tour, date & attended pax'}
+          </Text>
+        </View>
+        <ChevronRight
+          color={!reportRecord && tourEnded ? colors.background : colors.textSecondary}
+          size={20}
+        />
+      </Pressable>
+    );
+  };
 
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.content}>
@@ -426,62 +489,8 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 3. Post-Trip Report Button (only for live scheduled assignments) */}
-      {activeAssignment ? (
-        <Pressable
-          onPress={() => setShowReportModal(true)}
-          style={({ pressed }) => [
-            touchTarget,
-            styles.reportBtn,
-            reportRecord
-              ? styles.reportBtnDone
-              : tourEnded
-                ? styles.reportBtnNeeded
-                : styles.reportBtnDefault,
-            pressed && styles.pressed,
-          ]}
-        >
-          {reportRecord ? (
-            <CheckCircle2 color={colors.success} size={22} />
-          ) : (
-            <ClipboardList
-              color={tourEnded ? colors.background : colors.accent}
-              size={22}
-            />
-          )}
-          <View style={styles.reportCopy}>
-            <Text
-              style={[
-                styles.reportTitle,
-                reportRecord && { color: colors.success },
-                !reportRecord && tourEnded && { color: colors.background },
-              ]}
-            >
-              {reportRecord
-                ? `Report Submitted (${formatClock(new Date(reportRecord.submittedAtIso))})`
-                : tourEnded
-                  ? 'Post-Trip Report Needed'
-                  : 'Post-Trip Report'}
-            </Text>
-            <Text
-              style={[
-                styles.reportSub,
-                !reportRecord && tourEnded && { color: colors.background, opacity: 0.85 },
-              ]}
-            >
-              {reportRecord
-                ? reportRecord.queuedOffline
-                  ? 'Saved offline · Will sync when online · Tap to edit'
-                  : `Submitted (${reportRecord.attendedPax} joined) · Tap to edit`
-                : 'Pre-filled with guide, tour, date & attended pax'}
-            </Text>
-          </View>
-          <ChevronRight
-            color={!reportRecord && tourEnded ? colors.background : colors.textSecondary}
-            size={20}
-          />
-        </Pressable>
-      ) : null}
+      {/* 3. Post-Trip Report Button promoted to top ONLY after tour ends & still missing */}
+      {showReportAtTop ? renderPostTripReportButton() : null}
 
       {/* 4. Morning Mountain Picker (Hill Hikes Only) */}
       {isHillHike ? (
@@ -558,72 +567,7 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 5. Avalanche Level & MetAlerts & Bridge */}
-      {isHillHike && avalanche && avColors ? (
-        <View
-          style={[
-            styles.avalancheCard,
-            { backgroundColor: avColors.bg, borderColor: avColors.color },
-          ]}
-        >
-          <View style={styles.avalancheTop}>
-            <Text style={[styles.avalancheLevel, { color: avColors.color }]}>
-              AVALANCHE LEVEL {avalanche.dangerLevel}/5
-              {avalanche.dangerLevelName ? ` · ${avalanche.dangerLevelName.toUpperCase()}` : ''}
-            </Text>
-            {avalanche.exposedHeight1 > 0 ? (
-              <Text style={styles.avalancheHeight}>Above {avalanche.exposedHeight1}m</Text>
-            ) : null}
-          </View>
-          {avalanche.problems.length > 0 ? (
-            <Text style={styles.avalancheProblems}>
-              Problems: {avalanche.problems.join(' · ')}
-            </Text>
-          ) : null}
-          {avalanche.mainText ? (
-            <Text style={styles.avalancheMain} numberOfLines={3}>
-              {avalanche.mainText}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-
-      {weatherAlerts.map((alert) => (
-        <View key={alert.id} style={styles.metAlertCard}>
-          <AlertTriangle color={colors.warning} size={20} />
-          <View style={styles.alertCopy}>
-            <Text style={styles.metAlertTitle}>
-              {alert.event} ({alert.severity})
-            </Text>
-            {alert.validRangeLabel ? (
-              <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
-            ) : null}
-            <Text style={styles.alertDetailText} numberOfLines={2}>
-              {alert.headline}
-            </Text>
-          </View>
-        </View>
-      ))}
-
-      {bridgeAlert && bridgeSummary ? (
-        <Pressable
-          onPress={openBridgeWeather}
-          style={({ pressed }) => [styles.bridgeAlert, pressed && styles.pressed]}
-        >
-          <AlertTriangle color={colors.danger} size={22} />
-          <View style={styles.alertCopy}>
-            <Text style={styles.bridgeTitle}>
-              Kvaløya Bridge Gusts {Math.round(bridgeSummary.peakGustMs)} m/s (
-              {bridgeSummary.peakTime})
-            </Text>
-            <Text style={styles.bridgeDetail}>
-              Tap to view detailed Sandnessundbrua bridge forecast →
-            </Text>
-          </View>
-        </Pressable>
-      ) : null}
-
-      {/* 6. Guests Tile (only for live scheduled assignments) */}
+      {/* 5. Guests Tile (only for live scheduled assignments) */}
       {!isManualTripView ? (
         <Pressable
           onPress={openRosterTab}
@@ -644,7 +588,7 @@ export function TourOverviewScreen() {
         </Pressable>
       ) : null}
 
-      {/* 7. Full Tour Window Weather Card */}
+      {/* 6. Full Tour Window Weather Card */}
       <Pressable
         onPress={() =>
           navigation.navigate('DetailedWeather', {
@@ -708,6 +652,87 @@ export function TourOverviewScreen() {
           </Text>
         </View>
       </Pressable>
+
+      {/* 7. Grouped Weather & Safety Warnings (Avalanche + Clickable Yr/MET + Bridge) */}
+      {isHillHike && avalanche && avColors ? (
+        <View
+          style={[
+            styles.avalancheCard,
+            { backgroundColor: avColors.bg, borderColor: avColors.color },
+          ]}
+        >
+          <View style={styles.avalancheTop}>
+            <Text style={[styles.avalancheLevel, { color: avColors.color }]}>
+              AVALANCHE LEVEL {avalanche.dangerLevel}/5
+              {avalanche.dangerLevelName ? ` · ${avalanche.dangerLevelName.toUpperCase()}` : ''}
+            </Text>
+            {avalanche.exposedHeight1 > 0 ? (
+              <Text style={styles.avalancheHeight}>Above {avalanche.exposedHeight1}m</Text>
+            ) : null}
+          </View>
+          {avalanche.problems.length > 0 ? (
+            <Text style={styles.avalancheProblems}>
+              Problems: {avalanche.problems.join(' · ')}
+            </Text>
+          ) : null}
+          {avalanche.mainText ? (
+            <Text style={styles.avalancheMain} numberOfLines={3}>
+              {avalanche.mainText}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {weatherAlerts.map((alert) => {
+        const palette = alertSeverityColors(alert.riskColor);
+        return (
+          <Pressable
+            key={alert.id}
+            onPress={() => setSelectedAlert(alert)}
+            style={({ pressed }) => [
+              styles.metAlertCard,
+              { backgroundColor: palette.bg, borderColor: palette.color },
+              pressed && styles.pressed,
+            ]}
+          >
+            <AlertTriangle color={palette.color} size={20} />
+            <View style={styles.alertCopy}>
+              <View style={styles.alertHeaderRow}>
+                <Text style={[styles.metAlertTitle, { color: palette.color }]} numberOfLines={1}>
+                  {alert.event} ({alert.severity})
+                </Text>
+                <Text style={[styles.alertDetailsHint, { color: palette.color }]}>
+                  Details →
+                </Text>
+              </View>
+              {alert.validRangeLabel ? (
+                <Text style={styles.alertRangeText}>{alert.validRangeLabel}</Text>
+              ) : null}
+              <Text style={styles.alertDetailText} numberOfLines={2}>
+                {alert.headline}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+
+      {bridgeAlert && bridgeSummary ? (
+        <Pressable
+          onPress={openBridgeWeather}
+          style={({ pressed }) => [styles.bridgeAlert, pressed && styles.pressed]}
+        >
+          <AlertTriangle color={colors.danger} size={22} />
+          <View style={styles.alertCopy}>
+            <Text style={styles.bridgeTitle}>
+              Kvaløya Bridge Gusts {Math.round(bridgeSummary.peakGustMs)} m/s (
+              {bridgeSummary.peakTime})
+            </Text>
+            <Text style={styles.bridgeDetail}>
+              Tap to view detailed Sandnessundbrua bridge forecast →
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
 
       {/* 8. GPS Tracking Button */}
       {activeRoute.hasActiveTracking ? (
@@ -832,6 +857,11 @@ export function TourOverviewScreen() {
         );
       })}
 
+      {/* 10. Post-Trip Report Button at bottom before/during tour (or when already submitted) */}
+      {!showReportAtTop ? (
+        <View style={styles.bottomReportWrap}>{renderPostTripReportButton()}</View>
+      ) : null}
+
       {/* Combined Sheet Details Modal (Raw Cell + Note + Office Comments) */}
       <Modal
         visible={showSheetDetailsModal}
@@ -918,6 +948,10 @@ export function TourOverviewScreen() {
           onSubmitted={() => void refreshReports()}
         />
       ) : null}
+      <WeatherAlertModal
+        alert={selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+      />
     </ScrollView>
   );
 }
@@ -1094,7 +1128,10 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   alertCopy: { flex: 1, gap: 2 },
-  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800' },
+  alertHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  metAlertTitle: { color: colors.warning, fontSize: 13, fontWeight: '800', flex: 1 },
+  alertDetailsHint: { fontSize: 11, fontWeight: '800' },
+  bottomReportWrap: { marginTop: 6 },
   alertRangeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
   alertDetailText: { color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
   bridgeAlert: {

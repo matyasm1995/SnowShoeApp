@@ -11,6 +11,7 @@ const STORAGE_KEY_MANAGER_NOTES = 'cache:schedule_manager_notes_v8';
 const STORAGE_KEY_BG_COLORS = 'cache:schedule_bg_colors_v8';
 const STORAGE_KEY_FONT_LINES = 'cache:schedule_font_lines_v8';
 const STORAGE_KEY_SYNC_TIME = 'cache:schedule_synced_at';
+const STORAGE_KEY_SYNC_HASH = 'cache:schedule_hash_v8';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
 
 const RENTAL_CENTER_COL_INDEX = 2; // Column C
@@ -106,8 +107,127 @@ export interface SyncPayload {
   fromCache: boolean;
 }
 
+export interface CompanyDayTour {
+  id: string;
+  tourName: string;
+  sheetColumnHeader: string;
+  tourCategory: TourCategory;
+  guestCount: number;
+  assignedGuides: string[];
+  isMine: boolean;
+  vehicle: string | null;
+  meetingPoint: string | null;
+  shipName: string | null;
+  startTimeLabel: string | null;
+  endTimeLabel: string | null;
+  startMinutes: number | null;
+  endMinutes: number | null;
+  statusColor: TourColorStatus;
+  isCharter: boolean;
+  rawText: string;
+  cellNote: string | null;
+  commentsList: ThreadedComment[];
+}
+
+export interface CompanyVehicleItem {
+  vehicle: string;
+  summary: string;
+}
+
+export interface CompanyDayOperations {
+  tours: CompanyDayTour[];
+  vehicles: CompanyVehicleItem[];
+  rentalCenterRaw: string;
+  guidesOnDutyRaw: string;
+}
+
+interface CompactV2Row {
+  v?: Record<string, string>;
+  n?: Record<string, string>;
+  b?: Record<string, string>;
+  f?: number[];
+}
+
+function inflateCompactV2(
+  rows: CompactV2Row[],
+  totalColumns: number
+): {
+  values: string[][];
+  notes: string[][];
+  backgrounds: string[][];
+  fontLines: string[][];
+} {
+  const colCount = Math.max(1, totalColumns || 120);
+  const values: string[][] = [];
+  const notes: string[][] = [];
+  const backgrounds: string[][] = [];
+  const fontLines: string[][] = [];
+
+  for (let r = 0; r < rows.length; r++) {
+    const src = rows[r] ?? {};
+    const vRow: string[] = new Array<string>(colCount).fill('');
+    const nRow: string[] = new Array<string>(colCount).fill('');
+    const bRow: string[] = new Array<string>(colCount).fill('');
+    const fRow: string[] = new Array<string>(colCount).fill('');
+
+    if (src.v) {
+      for (const key of Object.keys(src.v)) {
+        const c = parseInt(key, 10);
+        if (c >= 0 && c < colCount) {
+          vRow[c] = src.v[key] ?? '';
+        }
+      }
+    }
+
+    if (src.n) {
+      for (const key of Object.keys(src.n)) {
+        const c = parseInt(key, 10);
+        if (c >= 0 && c < colCount) {
+          nRow[c] = src.n[key] ?? '';
+        }
+      }
+    }
+
+    if (src.b) {
+      for (const key of Object.keys(src.b)) {
+        const c = parseInt(key, 10);
+        if (c >= 0 && c < colCount) {
+          bRow[c] = src.b[key] ?? '';
+        }
+      }
+    }
+
+    if (Array.isArray(src.f)) {
+      for (const c of src.f) {
+        if (c >= 0 && c < colCount) {
+          fRow[c] = 'line-through';
+        }
+      }
+    }
+
+    values.push(vRow);
+    notes.push(nRow);
+    backgrounds.push(bRow);
+    fontLines.push(fRow);
+  }
+
+  return { values, notes, backgrounds, fontLines };
+}
+
 export async function downloadSchedule(): Promise<SyncPayload> {
-  const response = await fetch(CONFIG.sheet.scriptUrl, {
+  const [cachedPayload, prevHash] = await Promise.all([
+    getCachedSchedule(),
+    AsyncStorage.getItem(STORAGE_KEY_SYNC_HASH).catch(() => null),
+  ]);
+
+  const queryParts = ['v=2', 'days=40'];
+  if (cachedPayload && prevHash) {
+    queryParts.push(`hash=${encodeURIComponent(prevHash)}`);
+  }
+  const sep = CONFIG.sheet.scriptUrl.includes('?') ? '&' : '?';
+  const url = `${CONFIG.sheet.scriptUrl}${sep}${queryParts.join('&')}`;
+
+  const response = await fetch(url, {
     method: 'GET',
     headers: { Accept: 'application/json' },
   });
@@ -117,27 +237,69 @@ export async function downloadSchedule(): Promise<SyncPayload> {
   }
 
   const json = await response.json();
-  if (json.status !== 'success' || !json.values) {
+
+  if (json.status === 'not_modified' && cachedPayload) {
+    const syncedAt = new Date().toISOString();
+    await AsyncStorage.setItem(STORAGE_KEY_SYNC_TIME, syncedAt);
+    return {
+      ...cachedPayload,
+      syncedAt,
+      fromCache: false,
+    };
+  }
+
+  if (json.status !== 'success') {
     throw new Error(json.message || 'Malformed spreadsheet response.');
   }
 
-  const syncedAt = new Date().toISOString();
-  const managerNotes = Array.isArray(json.managerNotes) ? (json.managerNotes as string[][]) : [];
-  const backgrounds = Array.isArray(json.backgrounds) ? (json.backgrounds as string[][]) : [];
-  const fontLines = Array.isArray(json.fontLines) ? (json.fontLines as string[][]) : [];
+  let values: string[][];
+  let notes: string[][];
+  let backgrounds: string[][];
+  let fontLines: string[][];
 
-  await AsyncStorage.setItem(STORAGE_KEY_RAW_MATRIX, JSON.stringify(json.values));
-  await AsyncStorage.setItem(STORAGE_KEY_NOTES_MATRIX, JSON.stringify(json.notes || []));
-  await AsyncStorage.setItem(STORAGE_KEY_COMMENTS_LIST, JSON.stringify(json.comments || []));
+  if (json.format === 'v2' && Array.isArray(json.rows)) {
+    const inflated = inflateCompactV2(
+      json.rows as CompactV2Row[],
+      typeof json.totalColumns === 'number' ? json.totalColumns : 120
+    );
+    values = inflated.values;
+    notes = inflated.notes;
+    backgrounds = inflated.backgrounds;
+    fontLines = inflated.fontLines;
+  } else if (Array.isArray(json.values)) {
+    values = json.values as string[][];
+    notes = Array.isArray(json.notes) ? (json.notes as string[][]) : [];
+    backgrounds = Array.isArray(json.backgrounds) ? (json.backgrounds as string[][]) : [];
+    fontLines = Array.isArray(json.fontLines) ? (json.fontLines as string[][]) : [];
+  } else {
+    throw new Error('Malformed spreadsheet response.');
+  }
+
+  const syncedAt = new Date().toISOString();
+  const comments: SheetCommentItem[] = Array.isArray(json.comments)
+    ? (json.comments as SheetCommentItem[])
+    : [];
+  const managerNotes: string[][] = Array.isArray(json.managerNotes)
+    ? (json.managerNotes as string[][])
+    : [];
+
+  await AsyncStorage.setItem(STORAGE_KEY_RAW_MATRIX, JSON.stringify(values));
+  await AsyncStorage.setItem(STORAGE_KEY_NOTES_MATRIX, JSON.stringify(notes));
+  await AsyncStorage.setItem(STORAGE_KEY_COMMENTS_LIST, JSON.stringify(comments));
   await AsyncStorage.setItem(STORAGE_KEY_MANAGER_NOTES, JSON.stringify(managerNotes));
   await AsyncStorage.setItem(STORAGE_KEY_BG_COLORS, JSON.stringify(backgrounds));
   await AsyncStorage.setItem(STORAGE_KEY_FONT_LINES, JSON.stringify(fontLines));
   await AsyncStorage.setItem(STORAGE_KEY_SYNC_TIME, syncedAt);
+  if (typeof json.hash === 'string' && json.hash.length > 0) {
+    await AsyncStorage.setItem(STORAGE_KEY_SYNC_HASH, json.hash);
+  } else {
+    await AsyncStorage.removeItem(STORAGE_KEY_SYNC_HASH);
+  }
 
   return {
-    values: json.values,
-    notes: json.notes || [],
-    comments: json.comments || [],
+    values,
+    notes,
+    comments,
     backgrounds,
     fontLines,
     managerNotes,
@@ -956,4 +1118,297 @@ export function parseGuideAssignments(
   });
 
   return { assignments, targetRowIdx };
+}
+
+const NON_GUIDE_TOKENS = new Set([
+  'c2', 'c3', 'c4', 'caravelle', 'minibus', 'taxi', 'bus', 'van',
+  'pax', 'kai', 'prostneset', 'breivika', 'radisson', 'shop', 'at', 'from', 'to', 'and', 'or', 'with',
+  'hg', 'hurtigruten', 'havila', 'capella', 'castor', 'polaris', 'pollux',
+  'finnmarken', 'midnatsol', 'trollfjord', 'kong', 'harald', 'nordkapp', 'nordlys', 'nordnorge',
+  'richard', 'with', 'vesteralen', 'polarlys', 'mein', 'schiff', 'fred', 'olsen',
+  'ski', 'xc', 'snowshoe', 'fatbike', 'bike', 'hill', 'hike', 'coffee', 'trip', 'tour', 'charter',
+  'tverrfjellet', 'rundfjellet', 'malangen', 'charlottenlund', 'tove',
+  'open', 'closed', 'ok', 'yes', 'no', 'tbd', 'new', 'extra', 'group', 'private', 'vip',
+  'am', 'pm', 'h', 'hr', 'hrs', 'min',
+]);
+
+function extractAssignedGuidesFromCell(
+  cellText: string,
+  staffFirstNamesLower: Set<string>
+): string[] {
+  const cleaned = cellText
+    .replace(/\b\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}(?:[:.]\d{2})?\b/g, ' ')
+    .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
+    .replace(/\bcaravelle\s*#?\s*[234]\b/gi, ' ')
+    .replace(/\bkai\s*(?:8|21)\b/gi, ' ')
+    .replace(/\b\d+\s*pax\b/gi, ' ');
+
+  const rawTokens = cleaned.split(/[^A-Za-zÆØÅæøå]+/).filter((t) => t.length > 0);
+  const found: string[] = [];
+  const seen = new Set<string>();
+
+  for (const token of rawTokens) {
+    const lower = token.toLowerCase();
+    if (NON_GUIDE_TOKENS.has(lower)) continue;
+
+    const isShortInitials = token.length >= 2 && token.length <= 3;
+    const isStaffName = staffFirstNamesLower.has(lower);
+
+    if ((isShortInitials || isStaffName) && !seen.has(lower)) {
+      seen.add(lower);
+      found.push(token);
+    }
+  }
+
+  return found;
+}
+
+export function parseCompanyDayOperations(
+  matrix: string[][],
+  notes: string[][],
+  comments: SheetCommentItem[],
+  backgrounds: string[][],
+  fontLines: string[][],
+  myInitials: string,
+  targetDate: Date = new Date()
+): CompanyDayOperations {
+  const targetRowIdx = findRowIndexForDate(matrix, targetDate);
+  if (targetRowIdx === -1) {
+    return { tours: [], vehicles: [], rentalCenterRaw: '', guidesOnDutyRaw: '' };
+  }
+
+  const headerRow = matrix[1] || [];
+  const row = matrix[targetRowIdx] || [];
+  const noteRow = notes[targetRowIdx] || [];
+  const bgRow = backgrounds[targetRowIdx] || [];
+  const fontLineRow = fontLines[targetRowIdx] || [];
+
+  const myCodeLower = myInitials.trim().toLowerCase();
+  const sheetRowNumber = targetRowIdx + 1;
+
+  const staffFirstNamesLower = new Set<string>();
+  const maxStaffCol = Math.min(STAFF_COL_END, headerRow.length - 1);
+  for (let sc = STAFF_COL_START; sc <= maxStaffCol; sc++) {
+    const h = normalizeHeader(headerRow[sc]).toLowerCase();
+    for (const part of h.split(/[^a-zæøå]+/)) {
+      if (part.length >= 3) staffFirstNamesLower.add(part);
+    }
+  }
+
+  const rentalColIdx = findRentalCenterColIndex(headerRow);
+  const guidesOnDutyColIdx = findGuidesOnDutyColIndex(headerRow);
+  const rentalCenterRaw = (row[rentalColIdx] || '').toString().trim();
+  const guidesOnDutyRaw = (row[guidesOnDutyColIdx] || '').toString().trim();
+
+  const tours: CompanyDayTour[] = [];
+  const vehicleMap = new Map<string, string[]>();
+
+  const addVehicleEntry = (vehicleName: string, detail: string) => {
+    const list = vehicleMap.get(vehicleName) ?? [];
+    if (detail && !list.includes(detail)) {
+      list.push(detail);
+    }
+    vehicleMap.set(vehicleName, list);
+  };
+
+  // Scan dedicated Caravelle / Minibus columns if present in the sheet
+  for (let c = 2; c < row.length; c++) {
+    const hTitle = normalizeHeader(headerRow[c]);
+    const hLower = hTitle.toLowerCase();
+    if (hLower.startsWith('caravelle') || hLower === 'minibus') {
+      const val = (row[c] || '').toString().trim();
+      const strike = (fontLineRow[c] || '').toString().toLowerCase().includes('line-through');
+      if (val && !strike) {
+        addVehicleEntry(hTitle, val);
+      }
+    }
+  }
+
+  // Scan all tour columns for any active scheduled company tour
+  for (let c = 2; c < row.length; c++) {
+    const headerTitle = normalizeHeader(headerRow[c]);
+    if (!isTourColumn(c, headerTitle)) continue;
+
+    const cellText = (row[c] || '').toString().trim();
+    const lowerCell = cellText.toLowerCase();
+    if (
+      !cellText ||
+      lowerCell.includes('closed') ||
+      lowerCell.includes('canceled') ||
+      lowerCell.includes('cancelled')
+    ) {
+      continue;
+    }
+
+    const isStrikethrough = (fontLineRow[c] || '')
+      .toString()
+      .toLowerCase()
+      .includes('line-through');
+    if (isStrikethrough) {
+      continue;
+    }
+
+    const cellBg = (bgRow[c] || '').toString();
+    const statusColor = classifyCellColor(cellBg);
+    if (statusColor === 'closed') {
+      continue;
+    }
+
+    const hNext1 = normalizeHeader(headerRow[c + 1]).toLowerCase();
+    const hNext2 = normalizeHeader(headerRow[c + 2]).toLowerCase();
+    const hNext3 = normalizeHeader(headerRow[c + 3]).toLowerCase();
+    const isShipBookingBlock =
+      hNext1 === 'forecast' && hNext2 === 'on board' && hNext3 === 'shop';
+
+    let guestCount = 0;
+    let shipName: string | null = null;
+    const commentCols1Based: number[] = [c + 1, c + 2];
+    const noteCols0Based: number[] = [c, c + 1];
+
+    if (isShipBookingBlock) {
+      const onBoard = parseIntOrZero(row[c + 2]);
+      const shop = parseIntOrZero(row[c + 3]);
+      guestCount = onBoard + shop;
+
+      commentCols1Based.push(c + 3, c + 4);
+      noteCols0Based.push(c + 2, c + 3);
+
+      const maxShipCol = Math.max(c + 8, SHIP_COL_BB_INDEX);
+      for (let s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
+        if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship' || s === SHIP_COL_BB_INDEX) {
+          const val = (row[s] || '').toString().trim();
+          if (val) {
+            shipName = val;
+            commentCols1Based.push(s + 1);
+            noteCols0Based.push(s);
+            break;
+          }
+        }
+      }
+    } else {
+      guestCount = parseIntOrZero(row[c + 1]);
+      if (guestCount === 0) {
+        const inlinePax = /(\d+)\s*pax\b/i.exec(cellText);
+        if (inlinePax && inlinePax[1]) {
+          guestCount = parseIntOrZero(inlinePax[1]);
+        }
+      }
+    }
+
+    const uniqueCommentCols = new Set(commentCols1Based);
+    const matchedComments = comments.filter(
+      (com) =>
+        com.row === sheetRowNumber &&
+        com.column !== null &&
+        uniqueCommentCols.has(com.column)
+    );
+
+    const commentsList: ThreadedComment[] = matchedComments.map((com) => ({
+      author: com.author || 'Office',
+      content: com.comment,
+      cell: com.cell,
+      replies: Array.isArray(com.replies) ? com.replies : [],
+    }));
+
+    const uniqueNoteCols = Array.from(new Set(noteCols0Based));
+    const classicNotes = uniqueNoteCols
+      .map((idx) => (noteRow[idx] || '').toString().trim())
+      .filter((n) => n.length > 0);
+    const combinedClassicNote = Array.from(new Set(classicNotes)).join(' • ');
+
+    const allNoteAndCommentText = [
+      cellText,
+      combinedClassicNote,
+      ...commentsList.map((cm) => `${cm.content} ${cm.replies.map((r) => r.content).join(' ')}`),
+    ].join(' ');
+
+    if (!shipName) {
+      shipName = detectShipInText(allNoteAndCommentText);
+    }
+
+    const vehicle = detectVehicleInText(allNoteAndCommentText);
+    const meetingPoint = detectMeetingPoint(allNoteAndCommentText, headerTitle, shipName);
+    const { tourCategory } = inferTourCategory(headerTitle, allNoteAndCommentText);
+    const isCharter = c >= 44;
+
+    const parsedTime =
+      parseTimeRangeFromText(cellText) ??
+      parseTimeRangeFromText(combinedClassicNote) ??
+      parseTimeRangeFromText(headerTitle);
+
+    const defaultDur =
+      tourCategory === 'hill_hike'
+        ? 300
+        : tourCategory === 'coffee_snowshoe'
+          ? 270
+          : tourCategory === 'easy_snowshoe'
+            ? 150
+            : 180;
+
+    const startMinutes = parsedTime?.startMinutes ?? null;
+    const endMinutes =
+      parsedTime?.endMinutes ??
+      (startMinutes !== null ? startMinutes + defaultDur : null);
+
+    const displayTourName = buildDisplayTourName({
+      headerTitle,
+      cellText: allNoteAndCommentText,
+      shipName,
+      tourCategory,
+    });
+
+    const assignedGuides = extractAssignedGuidesFromCell(cellText, staffFirstNamesLower);
+    const words = lowerCell.split(/[^a-z0-9]+/);
+    const isMine = Boolean(myCodeLower && words.includes(myCodeLower));
+
+    const startLabel = parsedTime?.startLabel ?? null;
+    if (vehicle) {
+      const guideTag = assignedGuides.length > 0 ? assignedGuides.join('/') : displayTourName.slice(0, 18);
+      const timeTag = startLabel ? ` (${startLabel})` : '';
+      addVehicleEntry(vehicle, `${guideTag}${timeTag}`);
+    }
+
+    tours.push({
+      id: `${sheetRowNumber}-${c}`,
+      tourName: displayTourName,
+      sheetColumnHeader: headerTitle,
+      tourCategory,
+      guestCount,
+      assignedGuides,
+      isMine,
+      vehicle,
+      meetingPoint,
+      shipName,
+      startTimeLabel: startLabel,
+      endTimeLabel:
+        parsedTime?.endLabel ?? (endMinutes !== null ? formatHHMM(endMinutes) : null),
+      startMinutes,
+      endMinutes,
+      statusColor,
+      isCharter,
+      rawText: cellText,
+      cellNote: combinedClassicNote || null,
+      commentsList,
+    });
+  }
+
+  tours.sort((a, b) => {
+    const aMin = a.startMinutes ?? 9999;
+    const bMin = b.startMinutes ?? 9999;
+    return aMin - bMin;
+  });
+
+  const vehicles: CompanyVehicleItem[] = Array.from(vehicleMap.entries()).map(
+    ([vehicle, entries]) => ({
+      vehicle,
+      summary: entries.join(' · '),
+    })
+  );
+
+  return {
+    tours,
+    vehicles,
+    rentalCenterRaw,
+    guidesOnDutyRaw,
+  };
 }
