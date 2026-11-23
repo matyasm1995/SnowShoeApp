@@ -15,7 +15,7 @@ module.exports = {
     },
     android: {
       package: "com.toguides.app",
-      versionCode: 7,
+      versionCode: 9,
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#0B0D10"

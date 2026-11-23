@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -10,11 +11,26 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AlertTriangle, BookOpen, Building2, Check, ChevronRight, Clock } from 'lucide-react-native';
+import {
+  AlertTriangle,
+  BookOpen,
+  Building2,
+  Check,
+  ChevronRight,
+  Clock,
+  Download,
+} from 'lucide-react-native';
 
 import { GuideManualModal } from '../components/GuideManualModal';
 import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
+import { useTracking } from '../context/TrackingContext';
+import {
+  applyPendingUpdate,
+  checkForUpdateManually,
+  getInstalledUpdateInfo,
+  subscribeUpdateReady,
+} from '../services/appUpdateService';
 import {
   getGuideProfile,
   saveGuideProfile,
@@ -27,6 +43,7 @@ const STORAGE_KEY_PREVIEW_ALERTS = 'pref:preview_alerts_v1';
 
 export function SettingsScreen() {
   const { reloadProfileAndCache } = useActiveTour();
+  const { trackingActive } = useTracking();
   const [initials, setInitials] = useState<string>(CONFIG.defaults.guideInitials);
   const [fullName, setFullName] = useState<string>(CONFIG.defaults.guideFullName);
   const [contractType, setContractType] = useState<ContractType>(CONFIG.defaults.contractType);
@@ -34,6 +51,12 @@ export function SettingsScreen() {
   const [previewAlerts, setPreviewAlerts] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showManual, setShowManual] = useState(false);
+  const [updateReady, setUpdateReady] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  const updateInfo = getInstalledUpdateInfo();
+
+  useEffect(() => subscribeUpdateReady(setUpdateReady), []);
 
   useEffect(() => {
     void (async () => {
@@ -66,6 +89,56 @@ export function SettingsScreen() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     Alert.alert('Settings Saved', 'Profile preferences updated.');
+  };
+
+  const handleCheckUpdate = async () => {
+    if (updateReady) {
+      if (trackingActive) {
+        Alert.alert(
+          'GPS Tracking Active',
+          'Stop live GPS tracking before restarting to apply the update.'
+        );
+        return;
+      }
+      await applyPendingUpdate();
+      return;
+    }
+
+    setCheckingUpdate(true);
+    try {
+      const result = await checkForUpdateManually();
+      if (result === 'updated') {
+        if (trackingActive) {
+          Alert.alert(
+            'Update Downloaded',
+            'Saved and ready. Stop GPS tracking first, then tap Restart to apply.'
+          );
+        } else {
+          Alert.alert(
+            'Update Downloaded',
+            'A new version of TO Guides is ready. Restart now to apply it?',
+            [
+              { text: 'Later', style: 'cancel' },
+              { text: 'Restart Now', onPress: () => void applyPendingUpdate() },
+            ]
+          );
+        }
+      } else if (result === 'up_to_date') {
+        Alert.alert('Up to Date', 'You already have the latest TO Guides update.');
+      } else if (result === 'unavailable') {
+        Alert.alert(
+          'Updates Unavailable',
+          'Over-the-air updates are only active in installed Play Store / EAS builds.'
+        );
+      } else {
+        Alert.alert(
+          'Check Failed',
+          'Could not check for updates right now. Make sure you are online.'
+        );
+      }
+    } finally {
+      setCheckingUpdate(false);
+    }
   };
 
   return (
@@ -265,6 +338,35 @@ export function SettingsScreen() {
         <ChevronRight color={colors.textSecondary} size={20} />
       </Pressable>
 
+      {/* 6b. Check / Apply App Updates */}
+      <Pressable
+        onPress={() => void handleCheckUpdate()}
+        disabled={checkingUpdate}
+        style={({ pressed }) => [
+          sharedStyles.card,
+          styles.manualBtn,
+          updateReady && styles.updateReadyCard,
+          pressed && styles.pressed,
+        ]}
+      >
+        {checkingUpdate ? (
+          <ActivityIndicator color={colors.accent} size="small" />
+        ) : (
+          <Download color={updateReady ? colors.ice : colors.accent} size={20} />
+        )}
+        <View style={styles.contractTextCol}>
+          <Text style={[styles.previewTitle, updateReady && { color: colors.ice }]}>
+            {updateReady ? 'Update Ready — Tap to Restart' : 'Check for App Updates'}
+          </Text>
+          <Text style={styles.previewSub}>
+            {updateReady
+              ? 'New version downloaded · Applies in ~1 second'
+              : 'Pull the latest over-the-air update without waiting'}
+          </Text>
+        </View>
+        <ChevronRight color={updateReady ? colors.ice : colors.textSecondary} size={20} />
+      </Pressable>
+
       {/* 7. App & Integration Info */}
       <View style={styles.infoCard}>
         <Text style={styles.infoTitle}>
@@ -273,6 +375,12 @@ export function SettingsScreen() {
         <Text style={styles.infoLine}>• Active Tab: {CONFIG.sheet.tabName}</Text>
         <Text style={styles.infoLine}>• Mode: Offline-First AsyncStorage</Text>
         <Text style={styles.infoLine}>• Weather API: MET Norway Locationforecast 2.0</Text>
+        {updateInfo.shortId ? (
+          <Text style={styles.infoLine}>
+            • OTA Build: {updateInfo.shortId}
+            {updateInfo.createdAtLabel ? ` (${updateInfo.createdAtLabel})` : ''}
+          </Text>
+        ) : null}
       </View>
 
       <GuideManualModal visible={showManual} onClose={() => setShowManual(false)} />
@@ -342,6 +450,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  updateReadyCard: {
+    borderColor: colors.ice,
+    backgroundColor: colors.iceDarkBg,
   },
   previewTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
   previewSub: { color: colors.textSecondary, fontSize: 12 },

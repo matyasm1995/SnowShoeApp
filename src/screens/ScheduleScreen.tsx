@@ -1,9 +1,10 @@
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   Pressable,
   RefreshControl,
@@ -23,6 +24,9 @@ import {
   ChevronRight,
   ChevronUp,
   ClipboardList,
+  Download,
+  ExternalLink,
+  FileText,
   MessageSquare,
   Palmtree,
   RefreshCw,
@@ -35,7 +39,13 @@ import {
 import { TripReportModal } from '../components/TripReportModal';
 import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
+import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
+import { useTracking } from '../context/TrackingContext';
+import {
+  applyPendingUpdate,
+  subscribeUpdateReady,
+} from '../services/appUpdateService';
 import {
   getRouteById,
   ROUTE_CATALOG,
@@ -57,6 +67,7 @@ import {
   calculateDutyStatus,
   parseCompanyDayOperations,
   parseGuideAssignments,
+  parseGuideDayNotes,
   type CompanyDayTour,
   type GuideAssignment,
   type TourColorStatus,
@@ -131,10 +142,16 @@ export function ScheduleScreen() {
     refreshReports,
   } = useActiveTour();
 
+  const { trackingActive } = useTracking();
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => subscribeUpdateReady(setUpdateReady), []);
+
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const [showAllRoutes, setShowAllRoutes] = useState(false);
   const [showNextMonth, setShowNextMonth] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
+  const [showGuideNotesModal, setShowGuideNotesModal] = useState(false);
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<WeatherAlertItem | null>(null);
   const [inspectedCompanyTour, setInspectedCompanyTour] = useState<CompanyDayTour | null>(null);
@@ -311,6 +328,16 @@ export function ScheduleScreen() {
     );
   }, [syncData, profile.initials, selectedDate]);
 
+  const guideDayNotes = useMemo(() => {
+    if (!syncData) return null;
+    return parseGuideDayNotes(
+      syncData.values,
+      syncData.notes,
+      syncData.comments,
+      selectedDate
+    );
+  }, [syncData, selectedDate]);
+
   const companyTrips = useMemo(
     () => ROUTE_CATALOG.filter((r) => r.category !== 'bridge'),
     []
@@ -383,6 +410,14 @@ export function ScheduleScreen() {
           </Text>
         </View>
         <Pressable
+          onPress={() => void Linking.openURL(CONFIG.links.iticketPortal)}
+          style={({ pressed }) => [styles.iticketSyncBtn, pressed && styles.pressed]}
+        >
+          <ExternalLink color={colors.ice} size={14} />
+          <Text style={styles.iticketSyncText}>iTicket</Text>
+        </Pressable>
+
+        <Pressable
           onPress={() => void handleSync()}
           disabled={syncing}
           style={({ pressed }) => [styles.slimSyncBtn, pressed && styles.pressed]}
@@ -394,6 +429,20 @@ export function ScheduleScreen() {
           )}
         </Pressable>
       </View>
+
+      {/* 1b. OTA App Update Ready Banner (hidden during active GPS tracking) */}
+      {updateReady && !trackingActive ? (
+        <Pressable
+          onPress={() => void applyPendingUpdate()}
+          style={({ pressed }) => [styles.updateBanner, pressed && styles.pressed]}
+        >
+          <Download color={colors.background} size={18} />
+          <Text style={styles.updateBannerText} numberOfLines={1}>
+            App update ready — Tap to restart
+          </Text>
+          <Text style={styles.updateBannerAction}>Restart →</Text>
+        </Pressable>
+      ) : null}
 
       {/* 2. Date Navigation Bar */}
       <View style={styles.dateBar}>
@@ -453,6 +502,28 @@ export function ScheduleScreen() {
           </Text>
         </Pressable>
       </View>
+
+      {/* 2c. Daily Guide Notes from Column L (visible in both My Schedule & All Trips) */}
+      {guideDayNotes ? (
+        <Pressable
+          onPress={() => setShowGuideNotesModal(true)}
+          style={({ pressed }) => [styles.guideNotesCard, pressed && styles.pressed]}
+        >
+          <FileText color={colors.ice} size={18} />
+          <View style={styles.guideNotesCopy}>
+            <View style={styles.guideNotesTop}>
+              <Text style={styles.guideNotesLabel}>GUIDE NOTES</Text>
+              <Text style={styles.guideNotesHint}>Read →</Text>
+            </View>
+            <Text style={styles.guideNotesText} numberOfLines={3}>
+              {guideDayNotes.text ||
+                guideDayNotes.cellNote ||
+                guideDayNotes.commentsList[0]?.content ||
+                ''}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
 
       {viewMode === 'all' ? (
         <View style={styles.allTripsWrap}>
@@ -1257,6 +1328,62 @@ export function ScheduleScreen() {
         </View>
       </Modal>
 
+      {/* Guide Notes (Column L) Full-Text Modal */}
+      <Modal
+        visible={showGuideNotesModal && guideDayNotes !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowGuideNotesModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Guide Notes ({dateLabel})</Text>
+              <Pressable
+                onPress={() => setShowGuideNotesModal(false)}
+                style={styles.modalClose}
+              >
+                <X color={colors.text} size={22} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalBody}>
+              {guideDayNotes?.text ? (
+                <View style={styles.companyDetailCard}>
+                  <Text style={styles.companyDetailLabel}>GUIDE NOTES (COL L)</Text>
+                  <Text style={styles.companyDetailText} selectable>
+                    {guideDayNotes.text}
+                  </Text>
+                </View>
+              ) : null}
+
+              {guideDayNotes?.cellNote ? (
+                <View style={styles.companyDetailCard}>
+                  <Text style={styles.companyDetailLabel}>CELL NOTE</Text>
+                  <Text style={styles.companyDetailText} selectable>
+                    {guideDayNotes.cellNote}
+                  </Text>
+                </View>
+              ) : null}
+
+              {guideDayNotes?.commentsList.map((c, idx) => (
+                <View key={idx} style={styles.companyDetailCard}>
+                  <Text style={styles.companyDetailLabel}>COMMENT · {c.author}</Text>
+                  <Text style={styles.companyDetailText} selectable>
+                    {c.content}
+                  </Text>
+                  {c.replies.map((r, rIdx) => (
+                    <Text key={rIdx} style={styles.companyReplyText} selectable>
+                      {r.author || 'Reply'}: {r.content}
+                    </Text>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <WeatherAlertModal
         alert={selectedAlert}
         onClose={() => setSelectedAlert(null)}
@@ -1293,6 +1420,76 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  iticketSyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 38,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+  },
+  iticketSyncText: {
+    color: colors.ice,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  guideNotesCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  guideNotesCopy: { flex: 1, gap: 3 },
+  guideNotesTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  guideNotesLabel: {
+    color: colors.ice,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  guideNotesHint: {
+    color: colors.ice,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  guideNotesText: {
+    color: colors.text,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+  updateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.ice,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  updateBannerText: {
+    flex: 1,
+    color: colors.background,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  updateBannerAction: {
+    color: colors.background,
+    fontSize: 13,
+    fontWeight: '900',
   },
   dateBar: {
     flexDirection: 'row',

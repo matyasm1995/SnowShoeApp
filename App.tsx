@@ -22,7 +22,7 @@ import {
   Users,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FloatingTrackingBubble } from './src/components/FloatingTrackingBubble';
@@ -40,6 +40,7 @@ import {
 import { TrackingScreen } from './src/screens/TrackingScreen';
 import { WeatherScreen } from './src/screens/WeatherScreen';
 import { WelcomeSetupScreen } from './src/screens/WelcomeSetupScreen';
+import { checkAndDownloadUpdateSilently } from './src/services/appUpdateService';
 import { registerBackgroundScheduleSync } from './src/services/backgroundScheduleSync';
 import { colors } from './src/theme';
 
@@ -257,6 +258,16 @@ function AppShell() {
       void registerBackgroundScheduleSync();
     }
   }, [setupChecked, needsSetup]);
+
+  useEffect(() => {
+    void checkAndDownloadUpdateSilently(true);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void checkAndDownloadUpdateSilently(false);
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   if (!setupChecked) {
     return (

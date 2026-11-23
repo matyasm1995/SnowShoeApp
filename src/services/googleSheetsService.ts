@@ -15,6 +15,7 @@ const STORAGE_KEY_SYNC_HASH = 'cache:schedule_hash_v8';
 const STORAGE_KEY_GUIDE_PROFILE = 'pref:guide_profile_v1';
 
 const RENTAL_CENTER_COL_INDEX = 2; // Column C
+const GUIDE_NOTES_COL_INDEX = 11; // Column L
 const GUIDES_ON_DUTY_COL_INDEX = 41; // Column AP
 const STAFF_COL_START = 68;
 const STAFF_COL_END = 105;
@@ -139,6 +140,12 @@ export interface CompanyDayOperations {
   vehicles: CompanyVehicleItem[];
   rentalCenterRaw: string;
   guidesOnDutyRaw: string;
+}
+
+export interface GuideDayNotes {
+  text: string;
+  cellNote: string | null;
+  commentsList: ThreadedComment[];
 }
 
 interface CompactV2Row {
@@ -679,9 +686,43 @@ function isOnDutyMarker(cellLower: string): boolean {
   );
 }
 
-function isDayOffMarker(cellLower: string, guideInitialsLower: string): boolean {
+const AMBIGUOUS_WORD_INITIALS = new Set([
+  'to', 'he', 'in', 'no', 'at', 'on', 'or', 'as', 'is', 'by', 'an',
+  'am', 'pm', 'so', 'do', 'go', 'up', 'my', 'we', 'me', 'be', 'if',
+  'of', 'it', 'us', 'ok',
+]);
+
+function cellContainsGuideInitials(cellValue: unknown, guideInitials: string): boolean {
+  const targetClean = guideInitials.trim();
+  if (!targetClean) return false;
+  const targetLower = targetClean.toLowerCase();
+
+  const raw = (cellValue ?? '').toString().trim();
+  if (!raw) return false;
+
+  const tokens = raw.split(/[^A-Za-z0-9ÆØÅæøå]+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return false;
+
+  const isAmbiguous = AMBIGUOUS_WORD_INITIALS.has(targetLower);
+  const allShortInitials = tokens.every((t) => t.length <= 3 && !/^\d+$/.test(t));
+
+  for (const token of tokens) {
+    if (token.toLowerCase() !== targetLower) continue;
+    if (!isAmbiguous) return true;
+    // For ambiguous English words like "to" or "he", require at least one uppercase letter
+    // (e.g. "To", "TO", "He", "HE"), unless the entire cell is just short initials ("to", "to/mh")
+    if (/[A-ZÆØÅ]/.test(token) || allShortInitials) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isDayOffMarker(rawCell: string, guideInitials: string): boolean {
+  const cellLower = rawCell.toLowerCase();
   if (!cellLower) return false;
-  if (guideInitialsLower && cellLower.split(/[^a-z0-9]+/).includes(guideInitialsLower)) {
+  if (cellContainsGuideInitials(rawCell, guideInitials)) {
     return true;
   }
   return (
@@ -695,13 +736,6 @@ function isDayOffMarker(cellLower: string, guideInitialsLower: string): boolean 
   );
 }
 
-function cellContainsInitials(cellValue: unknown, initialsLower: string): boolean {
-  if (!initialsLower) return false;
-  const raw = (cellValue ?? '').toString().trim().toLowerCase();
-  if (!raw) return false;
-  return raw.split(/[^a-z0-9]+/).includes(initialsLower);
-}
-
 function findRentalCenterColIndex(headerRow: string[]): number {
   const maxScan = Math.min(10, headerRow.length - 1);
   for (let c = 0; c <= maxScan; c++) {
@@ -711,6 +745,17 @@ function findRentalCenterColIndex(headerRow: string[]): number {
     }
   }
   return RENTAL_CENTER_COL_INDEX;
+}
+
+function findGuideNotesColIndex(headerRow: string[]): number {
+  const maxScan = Math.min(21, headerRow.length - 1);
+  for (let c = 3; c <= maxScan; c++) {
+    const h = normalizeHeader(headerRow[c]).toLowerCase();
+    if (h.includes('guide note') || h.includes('guides note')) {
+      return c;
+    }
+  }
+  return GUIDE_NOTES_COL_INDEX;
 }
 
 function findGuidesOnDutyColIndex(headerRow: string[]): number {
@@ -723,6 +768,42 @@ function findGuidesOnDutyColIndex(headerRow: string[]): number {
   return GUIDES_ON_DUTY_COL_INDEX;
 }
 
+export function parseGuideDayNotes(
+  matrix: string[][],
+  notes: string[][],
+  comments: SheetCommentItem[],
+  targetDate: Date = new Date()
+): GuideDayNotes | null {
+  const targetRowIdx = findRowIndexForDate(matrix, targetDate);
+  if (targetRowIdx === -1) return null;
+
+  const headerRow = matrix[1] || [];
+  const colIdx = findGuideNotesColIndex(headerRow);
+  const row = matrix[targetRowIdx] || [];
+  const noteRow = notes[targetRowIdx] || [];
+
+  const text = (row[colIdx] || '').toString().trim();
+  const cellNote = (noteRow[colIdx] || '').toString().trim() || null;
+
+  const sheetRowNumber = targetRowIdx + 1;
+  const col1Based = colIdx + 1;
+  const matchedComments = comments.filter(
+    (com) => com.row === sheetRowNumber && com.column === col1Based
+  );
+  const commentsList: ThreadedComment[] = matchedComments.map((com) => ({
+    author: com.author || 'Office',
+    content: com.comment,
+    cell: com.cell,
+    replies: Array.isArray(com.replies) ? com.replies : [],
+  }));
+
+  if (!text && !cellNote && commentsList.length === 0) {
+    return null;
+  }
+
+  return { text, cellNote, commentsList };
+}
+
 export function calculateDutyStatus(
   matrix: string[][],
   targetRowIdx: number,
@@ -732,7 +813,6 @@ export function calculateDutyStatus(
   const hasMatrix = targetRowIdx !== -1 && Array.isArray(matrix) && matrix.length >= 2;
   const headerRow = hasMatrix ? (matrix[1] || []) : [];
   const row = hasMatrix ? (matrix[targetRowIdx] || []) : [];
-  const initialsLower = profile.initials.trim().toLowerCase();
 
   const rentalColIdx = hasMatrix ? findRentalCenterColIndex(headerRow) : RENTAL_CENTER_COL_INDEX;
   const guidesOnDutyColIdx = hasMatrix
@@ -742,8 +822,8 @@ export function calculateDutyStatus(
   const rawRentalCell = hasMatrix ? (row[rentalColIdx] || '').toString().trim() : '';
   const rawGuidesCell = hasMatrix ? (row[guidesOnDutyColIdx] || '').toString().trim() : '';
 
-  const inRentalCenter = hasMatrix && cellContainsInitials(rawRentalCell, initialsLower);
-  const inGuidesOnDuty = hasMatrix && cellContainsInitials(rawGuidesCell, initialsLower);
+  const inRentalCenter = hasMatrix && cellContainsGuideInitials(rawRentalCell, profile.initials);
+  const inGuidesOnDuty = hasMatrix && cellContainsGuideInitials(rawGuidesCell, profile.initials);
 
   if (assignmentsCount > 0) {
     if (inRentalCenter) {
@@ -825,7 +905,7 @@ export function calculateDutyStatus(
     };
   }
 
-  if (isDayOffMarker(cellLower, initialsLower)) {
+  if (isDayOffMarker(rawCell, profile.initials)) {
     return {
       type: 'day_off',
       title: 'Day Off / Leave',
@@ -974,8 +1054,7 @@ export function parseGuideAssignments(
       continue;
     }
 
-    const words = lowerCell.split(/[^a-z0-9]+/);
-    if (!cleanCode || !words.includes(cleanCode)) continue;
+    if (!cellContainsGuideInitials(cellText, guideCode)) continue;
 
     const hNext1 = normalizeHeader(headerRow[c + 1]).toLowerCase();
     const hNext2 = normalizeHeader(headerRow[c + 2]).toLowerCase();
@@ -1122,14 +1201,23 @@ export function parseGuideAssignments(
 
 const NON_GUIDE_TOKENS = new Set([
   'c2', 'c3', 'c4', 'caravelle', 'minibus', 'taxi', 'bus', 'van',
-  'pax', 'kai', 'prostneset', 'breivika', 'radisson', 'shop', 'at', 'from', 'to', 'and', 'or', 'with',
+  'pax', 'kai', 'prostneset', 'breivika', 'radisson', 'shop',
   'hg', 'hurtigruten', 'havila', 'capella', 'castor', 'polaris', 'pollux',
   'finnmarken', 'midnatsol', 'trollfjord', 'kong', 'harald', 'nordkapp', 'nordlys', 'nordnorge',
-  'richard', 'with', 'vesteralen', 'polarlys', 'mein', 'schiff', 'fred', 'olsen',
+  'richard', 'vesteralen', 'polarlys', 'mein', 'schiff', 'fred', 'olsen',
   'ski', 'xc', 'snowshoe', 'fatbike', 'bike', 'hill', 'hike', 'coffee', 'trip', 'tour', 'charter',
   'tverrfjellet', 'rundfjellet', 'malangen', 'charlottenlund', 'tove',
-  'open', 'closed', 'ok', 'yes', 'no', 'tbd', 'new', 'extra', 'group', 'private', 'vip',
-  'am', 'pm', 'h', 'hr', 'hrs', 'min',
+  'open', 'closed', 'yes', 'tbd', 'new', 'extra', 'group', 'private', 'vip',
+  'hrs', 'min',
+]);
+
+// Common short English/Norwegian words: only ignored when all-lowercase in prose
+// (capitalized tokens like "To", "TO", "He", "HE", "No", "Am" are kept as guide initials!)
+const LOWERCASE_ONLY_STOPWORDS = new Set([
+  'to', 'he', 'in', 'no', 'at', 'on', 'or', 'as', 'is', 'by', 'an',
+  'am', 'pm', 'so', 'do', 'go', 'up', 'my', 'we', 'me', 'be', 'if',
+  'of', 'it', 'us', 'ok', 'and', 'for', 'the', 'from', 'with', 'not',
+  'but', 'per', 'via', 'hr', 'h',
 ]);
 
 function extractAssignedGuidesFromCell(
@@ -1144,12 +1232,18 @@ function extractAssignedGuidesFromCell(
     .replace(/\b\d+\s*pax\b/gi, ' ');
 
   const rawTokens = cleaned.split(/[^A-Za-zÆØÅæøå]+/).filter((t) => t.length > 0);
+  const allShortTokens = rawTokens.length > 0 && rawTokens.every((t) => t.length <= 3);
   const found: string[] = [];
   const seen = new Set<string>();
 
   for (const token of rawTokens) {
     const lower = token.toLowerCase();
     if (NON_GUIDE_TOKENS.has(lower)) continue;
+
+    const isAllLower = token === lower;
+    if (LOWERCASE_ONLY_STOPWORDS.has(lower) && isAllLower && !allShortTokens) {
+      continue;
+    }
 
     const isShortInitials = token.length >= 2 && token.length <= 3;
     const isStaffName = staffFirstNamesLower.has(lower);
@@ -1358,8 +1452,7 @@ export function parseCompanyDayOperations(
     });
 
     const assignedGuides = extractAssignedGuidesFromCell(cellText, staffFirstNamesLower);
-    const words = lowerCell.split(/[^a-z0-9]+/);
-    const isMine = Boolean(myCodeLower && words.includes(myCodeLower));
+    const isMine = cellContainsGuideInitials(cellText, myInitials);
 
     const startLabel = parsedTime?.startLabel ?? null;
     if (vehicle) {

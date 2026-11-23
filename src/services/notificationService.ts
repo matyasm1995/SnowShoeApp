@@ -218,9 +218,10 @@ export async function scheduleTomorrowDispatchNotification(params: {
       if (raw) lastRecord = JSON.parse(raw) as LastTomorrowDispatchRecord;
     } catch {}
 
-    // If 18:30 has already passed today: only send an immediate follow-up if called from
-    // background sync and tomorrow's schedule changed compared to what was previously scheduled
-    if (target1830.getTime() <= now.getTime() + 60000) {
+    // If 18:30 has already passed today (or is <5s away): only send an immediate follow-up
+    // if called from background sync and tomorrow's schedule changed since last dispatch.
+    // Reusing TOMORROW_DISPATCH_NOTIF_ID replaces the previous 18:30 notification in-place.
+    if (target1830.getTime() <= now.getTime() + 5000) {
       const changedSinceLastDispatch =
         params.notifyIfChangedAfterDispatch === true &&
         lastRecord !== null &&
@@ -229,7 +230,12 @@ export async function scheduleTomorrowDispatchNotification(params: {
         now.getHours() < 21;
 
       if (changedSinceLastDispatch) {
+        try {
+          await Notifications.dismissNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
+        } catch {}
+
         await Notifications.scheduleNotificationAsync({
+          identifier: TOMORROW_DISPATCH_NOTIF_ID,
           content: {
             title: `Tomorrow's Schedule Updated (${dayName})`,
             body,

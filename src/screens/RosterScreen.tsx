@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -16,6 +17,7 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
+  ExternalLink,
   Minus,
   Plus,
   RotateCcw,
@@ -24,6 +26,7 @@ import {
   X,
 } from 'lucide-react-native';
 
+import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
 import { useRoster } from '../hooks/useRoster';
 import { colors, sharedStyles, touchTarget } from '../theme';
@@ -207,6 +210,18 @@ export function RosterScreen() {
                 <Text style={styles.addToggleTextDark}>Add Guest</Text>
               </>
             )}
+          </Pressable>
+
+          <Pressable
+            onPress={() => void Linking.openURL(CONFIG.links.iticketPortal)}
+            style={({ pressed }) => [
+              touchTarget,
+              styles.iticketBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            <ExternalLink color={colors.ice} size={16} />
+            <Text style={styles.iticketBtnText}>iTicket</Text>
           </Pressable>
         </View>
 
@@ -501,6 +516,17 @@ const styles = StyleSheet.create({
   },
   addToggleTextDark: { color: colors.background, fontSize: 14, fontWeight: '800' },
   addToggleText: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  iticketBtn: {
+    flexDirection: 'row',
+    gap: 5,
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 12,
+    minHeight: 44,
+    paddingHorizontal: 12,
+  },
+  iticketBtnText: { color: colors.ice, fontSize: 13, fontWeight: '800' },
   addFormCard: { padding: 12, gap: 8 },
   nameAndPaxRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
   nameCol: { flex: 1 },

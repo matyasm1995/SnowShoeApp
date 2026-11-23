@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  ExternalLink,
   FileText,
   MapPin,
   MessageSquare,
@@ -35,6 +36,7 @@ import {
 import { TripReportModal } from '../components/TripReportModal';
 import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
+import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
 import { matchContactsForTour } from '../data/contacts';
 import {
@@ -567,25 +569,35 @@ export function TourOverviewScreen() {
         </View>
       ) : null}
 
-      {/* 5. Guests Tile (only for live scheduled assignments) */}
+      {/* 5. Guests Tile + iTicket Quick Check (only for live scheduled assignments) */}
       {!isManualTripView ? (
-        <Pressable
-          onPress={openRosterTab}
-          style={({ pressed }) => [touchTarget, styles.guestTileWide, pressed && styles.pressed]}
-        >
-          <View style={styles.guestTileLeft}>
-            <Users color={colors.accent} size={22} />
-            <View>
-              <Text style={styles.guestTileTitle}>
-                {expectedPax > 0 ? `${expectedPax} Guests Expected` : 'Open Bookings'}
-              </Text>
-              <Text style={styles.guestTileSub}>
-                {currentRosterPax} registered on scratchpad · Tap to open Roster
-              </Text>
+        <View style={styles.guestActionRow}>
+          <Pressable
+            onPress={openRosterTab}
+            style={({ pressed }) => [touchTarget, styles.guestTileWide, pressed && styles.pressed]}
+          >
+            <View style={styles.guestTileLeft}>
+              <Users color={colors.accent} size={22} />
+              <View style={styles.guestTileCopy}>
+                <Text style={styles.guestTileTitle} numberOfLines={1}>
+                  {expectedPax > 0 ? `${expectedPax} Guests Expected` : 'Open Bookings'}
+                </Text>
+                <Text style={styles.guestTileSub} numberOfLines={1}>
+                  {currentRosterPax} on scratchpad · Roster
+                </Text>
+              </View>
             </View>
-          </View>
-          <ChevronRight color={colors.textSecondary} size={20} />
-        </Pressable>
+            <ChevronRight color={colors.textSecondary} size={20} />
+          </Pressable>
+
+          <Pressable
+            onPress={() => void Linking.openURL(CONFIG.links.iticketPortal)}
+            style={({ pressed }) => [touchTarget, styles.iticketTileBtn, pressed && styles.pressed]}
+          >
+            <ExternalLink color={colors.ice} size={18} />
+            <Text style={styles.iticketTileText}>iTicket</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {/* 6. Full Tour Window Weather Card */}
@@ -1146,7 +1158,13 @@ const styles = StyleSheet.create({
   },
   bridgeTitle: { color: '#FCA5A5', fontSize: 14, fontWeight: '800' },
   bridgeDetail: { color: colors.textSecondary, fontSize: 11 },
+  guestActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
   guestTileWide: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1157,9 +1175,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  guestTileLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  guestTileTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  guestTileLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  guestTileCopy: { flex: 1 },
+  guestTileTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
   guestTileSub: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  iticketTileBtn: {
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    gap: 4,
+    minWidth: 78,
+  },
+  iticketTileText: { color: colors.ice, fontSize: 12, fontWeight: '800' },
   weatherStrip: { gap: 6, padding: 12 },
   weatherStripTop: {
     flexDirection: 'row',
