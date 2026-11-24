@@ -1409,7 +1409,6 @@ export function parseCompanyDayOperations(
     const cellText = (row[c] || '').toString().trim();
     const lowerCell = cellText.toLowerCase();
     if (
-      !cellText ||
       lowerCell.includes('closed') ||
       lowerCell.includes('canceled') ||
       lowerCell.includes('cancelled')
@@ -1464,12 +1463,17 @@ export function parseCompanyDayOperations(
       }
     } else {
       guestCount = parseIntOrZero(row[c + 1]);
-      if (guestCount === 0) {
+      if (guestCount === 0 && cellText) {
         const inlinePax = /(\d+)\s*pax\b/i.exec(cellText);
         if (inlinePax && inlinePax[1]) {
           guestCount = parseIntOrZero(inlinePax[1]);
         }
       }
+    }
+
+    const hasYellowOrConfirmed = statusColor === 'pending' || statusColor === 'confirmed';
+    if (!cellText && !hasYellowOrConfirmed && guestCount === 0) {
+      continue;
     }
 
     const uniqueCommentCols = new Set(commentCols1Based);

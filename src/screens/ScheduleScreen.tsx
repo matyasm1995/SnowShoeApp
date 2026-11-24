@@ -672,7 +672,7 @@ export function ScheduleScreen() {
                       ))
                     ) : (
                       <Text style={styles.allGuidesFallback} numberOfLines={1}>
-                        {ct.rawText}
+                        {ct.rawText || 'Unassigned'}
                       </Text>
                     )}
                   </View>
@@ -1299,7 +1299,7 @@ export function ScheduleScreen() {
                         : ''}
                     </Text>
                     <Text style={styles.companyDetailText} selectable>
-                      {inspectedCompanyTour.rawText}
+                      {inspectedCompanyTour.rawText || '(No guide assigned yet)'}
                     </Text>
                   </View>
 
