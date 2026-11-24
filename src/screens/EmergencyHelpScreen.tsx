@@ -10,7 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { MapPin, Phone, RefreshCw, ShieldAlert } from 'lucide-react-native';
+import { ExternalLink, FileWarning, MapPin, Phone, RefreshCw, ShieldAlert } from 'lucide-react-native';
 
 import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
@@ -335,6 +335,21 @@ export function EmergencyHelpScreen() {
         </View>
       </View>
 
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => void Linking.openURL(CONFIG.links.accidentReportForm)}
+        style={({ pressed }) => [touchTarget, styles.accidentFormBtn, pressed && styles.pressed]}
+      >
+        <FileWarning color={colors.warning} size={22} />
+        <View style={styles.accidentFormCopy}>
+          <Text style={styles.accidentFormTitle}>Accident / Incident Report Form</Text>
+          <Text style={styles.accidentFormSub}>
+            Fill out after the trip if an accident or incident occurred
+          </Text>
+        </View>
+        <ExternalLink color={colors.warning} size={18} />
+      </Pressable>
+
       {/* 5. Important Company, Towing, Taxi & Emergency Contacts */}
       <Text style={sharedStyles.sectionTitle}>Key Numbers (Offline)</Text>
       <View style={styles.contactsList}>
@@ -474,5 +489,19 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   dialBtnText: { color: colors.background, fontSize: 14, fontWeight: '800' },
+  accidentFormBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.warningDarkBg,
+    borderColor: colors.warning,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  accidentFormCopy: { flex: 1, gap: 2 },
+  accidentFormTitle: { color: colors.warning, fontSize: 15, fontWeight: '800' },
+  accidentFormSub: { color: colors.textSecondary, fontSize: 12, lineHeight: 16 },
   pressed: { opacity: 0.78 },
 });

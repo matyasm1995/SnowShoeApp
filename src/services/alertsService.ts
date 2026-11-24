@@ -119,7 +119,16 @@ function formatCleanAlertRange(fromIso: string, toIso: string): string {
     minute: '2-digit',
   });
 
-  return `${dayFrom} ${tFrom}–${tTo}`;
+  if (osloDateKey(dFrom) === osloDateKey(dTo)) {
+    return `${dayFrom} ${tFrom}–${tTo}`;
+  }
+
+  const dayTo = dTo.toLocaleDateString('en-GB', {
+    timeZone: 'Europe/Oslo',
+    day: 'numeric',
+    month: 'short',
+  });
+  return `${dayFrom} ${tFrom} – ${dayTo} ${tTo}`;
 }
 
 interface RawMetAlertFeature {
@@ -172,7 +181,7 @@ export async function fetchWeatherAlerts(
     ];
   }
 
-  const key = `alerts:met:v3:${point.latitude.toFixed(2)}:${point.longitude.toFixed(2)}`;
+  const key = `alerts:met:v4:${point.latitude.toFixed(2)}:${point.longitude.toFixed(2)}`;
   const params = new URLSearchParams({
     lat: point.latitude.toFixed(4),
     lon: point.longitude.toFixed(4),

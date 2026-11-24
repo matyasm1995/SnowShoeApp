@@ -120,6 +120,7 @@ export interface ActiveTourContextValue {
   selectManualRoute: (routeId: string | null) => void;
   setHillHikeMountain: (mountainId: 'tverrfjellet' | 'rundfjellet') => void;
   shiftDate: (days: number) => void;
+  selectDate: (date: Date) => void;
   resetToToday: () => void;
   syncNow: () => Promise<void>;
   reloadProfileAndCache: () => Promise<void>;
@@ -433,6 +434,11 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const selectDate = useCallback((date: Date) => {
+    setManualRouteId(null);
+    setSelectedDate(new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0));
+  }, []);
+
   const resetToToday = useCallback(() => {
     setManualRouteId(null);
     setSelectedDate(new Date());
@@ -468,6 +474,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     selectManualRoute,
     setHillHikeMountain,
     shiftDate,
+    selectDate,
     resetToToday,
     syncNow,
     reloadProfileAndCache,

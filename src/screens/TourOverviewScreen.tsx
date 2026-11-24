@@ -21,6 +21,7 @@ import {
   Clock,
   ExternalLink,
   FileText,
+  FileWarning,
   MapPin,
   MessageSquare,
   Mountain,
@@ -190,8 +191,6 @@ export function TourOverviewScreen() {
 
   const bottomWeather = bottomSummary.repHour;
   const topWeather = topSummary.repHour;
-  const tverrTopWindow = tverrTopSummary.repHour;
-  const rundTopWindow = rundTopSummary.repHour;
 
   const bridgeAlert =
     bridgeSummary !== null &&
@@ -206,12 +205,18 @@ export function TourOverviewScreen() {
         : 'Loading forecast…';
 
   const primaryWeather = topWeather ?? bottomWeather;
-  const feltChill = primaryWeather
-    ? calculateWindChill(
-        primaryWeather.airTemperatureC,
-        metersPerSecondToKmh(primaryWeather.windSpeedMs)
-      )
-    : null;
+  const primaryPeakWindMs = topSummary.hasData
+    ? topSummary.peakWindMs
+    : bottomSummary.hasData
+      ? bottomSummary.peakWindMs
+      : primaryWeather?.windSpeedMs ?? null;
+  const feltChill =
+    primaryWeather && primaryPeakWindMs !== null
+      ? calculateWindChill(
+          primaryWeather.airTemperatureC,
+          metersPerSecondToKmh(primaryPeakWindMs)
+        )
+      : null;
   const risk = feltChill !== null ? exposureRisk(feltChill) : null;
 
   const daylight = useMemo(() => tromsoDaylight(selectedDate), [selectedDate]);
@@ -524,10 +529,10 @@ export function TourOverviewScreen() {
                   activeRoute.id === 'tverrfjellet' && styles.mountainTextActive,
                 ]}
               >
-                {tverrTopWindow
-                  ? `${tverrTopWindow.windSpeedMs.toFixed(1)} m/s ${
-                      tverrTopWindow.windFromDirectionDeg !== null
-                        ? windCardinal(tverrTopWindow.windFromDirectionDeg)
+                {tverrTopSummary.hasData
+                  ? `Max ${tverrTopSummary.peakWindMs.toFixed(1)} m/s${
+                      tverrTopSummary.dirDeg !== null
+                        ? ` ${windCardinal(tverrTopSummary.dirDeg)}`
                         : ''
                     } · 45m drive`
                   : '45m drive'}
@@ -556,10 +561,10 @@ export function TourOverviewScreen() {
                   activeRoute.id === 'rundfjellet' && styles.mountainTextActive,
                 ]}
               >
-                {rundTopWindow
-                  ? `${rundTopWindow.windSpeedMs.toFixed(1)} m/s ${
-                      rundTopWindow.windFromDirectionDeg !== null
-                        ? windCardinal(rundTopWindow.windFromDirectionDeg)
+                {rundTopSummary.hasData
+                  ? `Max ${rundTopSummary.peakWindMs.toFixed(1)} m/s${
+                      rundTopSummary.dirDeg !== null
+                        ? ` ${windCardinal(rundTopSummary.dirDeg)}`
                         : ''
                     } · 30m drive`
                   : '30m drive'}
@@ -627,7 +632,7 @@ export function TourOverviewScreen() {
               </Text>
               <Text style={styles.dualMiniVal}>
                 {bottomWeather ? formatTemperature(bottomWeather.airTemperatureC) : '—'} ·{' '}
-                {bottomWeather ? `${bottomWeather.windSpeedMs.toFixed(1)} m/s` : '—'}
+                {bottomSummary.hasData ? `max ${bottomSummary.peakWindMs.toFixed(1)} m/s` : '—'}
               </Text>
             </View>
             <View style={styles.dualMiniCol}>
@@ -636,7 +641,7 @@ export function TourOverviewScreen() {
               </Text>
               <Text style={styles.dualMiniVal}>
                 {topWeather ? formatTemperature(topWeather.airTemperatureC) : '—'} ·{' '}
-                {topWeather ? `${topWeather.windSpeedMs.toFixed(1)} m/s` : '—'}
+                {topSummary.hasData ? `max ${topSummary.peakWindMs.toFixed(1)} m/s` : '—'}
               </Text>
             </View>
           </View>
@@ -645,7 +650,7 @@ export function TourOverviewScreen() {
             <WeatherIcon symbolCode={bottomWeather?.symbolCode ?? null} size={28} />
             <Text style={styles.singleWeatherLine}>
               {bottomWeather
-                ? `${formatTemperature(bottomWeather.airTemperatureC)} · Wind ${bottomWeather.windSpeedMs.toFixed(1)} m/s`
+                ? `${formatTemperature(bottomWeather.airTemperatureC)} · Max wind ${bottomSummary.peakWindMs.toFixed(1)} m/s`
                 : weatherUnavailableText}
             </Text>
           </View>
@@ -874,6 +879,21 @@ export function TourOverviewScreen() {
         <View style={styles.bottomReportWrap}>{renderPostTripReportButton()}</View>
       ) : null}
 
+      {/* 10b. Accident / Incident Report Form Link */}
+      <Pressable
+        onPress={() => void Linking.openURL(CONFIG.links.accidentReportForm)}
+        style={({ pressed }) => [touchTarget, styles.accidentBtn, pressed && styles.pressed]}
+      >
+        <FileWarning color={colors.warning} size={18} />
+        <View style={styles.accidentCopy}>
+          <Text style={styles.accidentTitle}>Accident / Incident Report Form</Text>
+          <Text style={styles.accidentSub}>
+            Open official form if an accident occurred on this trip
+          </Text>
+        </View>
+        <ExternalLink color={colors.textSecondary} size={16} />
+      </Pressable>
+
       {/* Combined Sheet Details Modal (Raw Cell + Note + Office Comments) */}
       <Modal
         visible={showSheetDetailsModal}
@@ -947,6 +967,7 @@ export function TourOverviewScreen() {
           dateIso={dateKey}
           guideName={profile.fullName}
           tripName={activeAssignment.tourName}
+          rawHeader={activeAssignment.sheetColumnHeader}
           initialPax={currentRosterPax > 0 ? currentRosterPax : expectedPax}
           isHillHike={isHillHike}
           hillHikeLocation={
@@ -1374,5 +1395,19 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   fullReplyAuthor: { color: colors.ice, fontSize: 11, fontWeight: '800' },
+  accidentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  accidentCopy: { flex: 1, gap: 2 },
+  accidentTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  accidentSub: { color: colors.textSecondary, fontSize: 12 },
   pressed: { opacity: 0.75 },
 });

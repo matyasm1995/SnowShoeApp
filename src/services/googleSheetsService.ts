@@ -467,12 +467,16 @@ function parseTimeRangeFromText(
     }
   }
 
-  const singleRegex = /(?:^|\s|at\s+)(\d{1,2}):\s*(\d{2})\b/i;
-  const singleMatch = singleRegex.exec(text);
-  if (singleMatch) {
+  const singleRegex = /(?:^|\s|at\s+)(\d{1,2})([:.])\s*(\d{2})(?!\.\d)\b/gi;
+  let singleMatch: RegExpExecArray | null;
+  while ((singleMatch = singleRegex.exec(text)) !== null) {
     const sh = parseInt(singleMatch[1] ?? '', 10);
-    const sm = parseInt(singleMatch[2] ?? '', 10);
+    const sep = singleMatch[2] ?? ':';
+    const sm = parseInt(singleMatch[3] ?? '', 10);
     if (sh >= 7 && sh <= 23 && sm >= 0 && sm <= 59) {
+      if (sep === '.' && sm % 5 !== 0) {
+        continue;
+      }
       const startMinutes = sh * 60 + sm;
       return {
         startMinutes,
@@ -518,7 +522,22 @@ function inferTourCategory(headerTitle: string, combinedText: string): {
     return { activity: 'hiking', tourCategory: 'hill_hike' };
   }
 
+  if (combined.includes('snowshoe')) {
+    return { activity: 'snowshoe', tourCategory: 'easy_snowshoe' };
+  }
+
   if (combined.includes('ski')) {
+    return { activity: 'ski', tourCategory: 'ski' };
+  }
+
+  // Trollfjord, Finnmarken, and Midnatsol cruise boats default to ski trips
+  // unless another activity is explicitly mentioned above.
+  if (
+    combined.includes('trollfjord') ||
+    combined.includes('finnmarken') ||
+    combined.includes('midnatsol') ||
+    combined.includes('midnattsol')
+  ) {
     return { activity: 'ski', tourCategory: 'ski' };
   }
 
@@ -553,7 +572,14 @@ function detectShipInText(text: string): string | null {
   if (mein) return mein[0].replace(/\s+/g, ' ').trim();
   const fred = /fred\s*olsen/i.exec(text);
   if (fred) return 'Fred Olsen';
+  if (/\b(?:ms\s*)?hamburg\b/i.test(text)) return 'MS Hamburg';
   return null;
+}
+
+function normalizeShipCellValue(rawVal: string): string {
+  const trimmed = rawVal.trim();
+  if (!trimmed) return '';
+  return detectShipInText(trimmed) ?? trimmed;
 }
 
 function detectVehicleInText(text: string): string | null {
@@ -598,6 +624,54 @@ function detectMeetingPoint(
   return null;
 }
 
+function matchRegularTourTitle(headerTitle: string): string | null {
+  const lower = headerTitle.toLowerCase();
+
+  // Coastal cruise (Hurtigruten / Havila) regular tours
+  if (/\bm5\b/.test(lower) || (lower.includes('ski') && /14[:.]15/.test(lower))) {
+    return 'HG ski trip';
+  }
+  if (/\bn5\b/.test(lower) || (lower.includes('snowshoe') && /14[:.]15/.test(lower))) {
+    return 'HG snowshoe trip';
+  }
+
+  if (lower.includes('coffe') || lower.includes('coffee')) {
+    return 'Coffee trip';
+  }
+  if (lower.includes('fatbik')) {
+    return 'Fatbike trip';
+  }
+  if (lower.includes('brosmetind') || lower.includes('sightseeing hike')) {
+    return 'Sightseeing hike';
+  }
+  if (lower.includes('w 104') || lower.includes('hill hike')) {
+    return 'Hill hike';
+  }
+  if (lower.includes('w 103') || (lower.includes('snowshoe') && /10[:.]00/.test(lower))) {
+    return 'Easy snowshoe trip';
+  }
+  if (lower.includes('w 101') || lower.includes('ski trip')) {
+    if (/13[:.]30|14[:.]00|afternoon/.test(lower)) {
+      return 'Ski trip afternoon';
+    }
+    return 'Ski trip morning';
+  }
+
+  return null;
+}
+
+const KNOWN_PARTNERS: readonly { pattern: RegExp; label: string }[] = [
+  { pattern: /\bnext\s+travel\s+nordic\b/i, label: 'Next Travel Nordic' },
+  { pattern: /\bdelta\s+of\s+scandinavia\b/i, label: 'Delta of Scandinavia' },
+  { pattern: /\bbest\s+arctic\b/i, label: 'Best Arctic' },
+  { pattern: /\bnordic\s+tours\b/i, label: 'Nordic Tours' },
+  { pattern: /\bbaraka\b/i, label: 'Baraka' },
+  { pattern: /\bintrepid\b/i, label: 'Intrepid' },
+  { pattern: /\bs\.h\.tours\b/i, label: 'S.H.Tours' },
+  { pattern: /\btui\b/i, label: 'TUI' },
+  { pattern: /\becs\b/i, label: 'ECS' },
+];
+
 function buildDisplayTourName(params: {
   headerTitle: string;
   cellText: string;
@@ -608,6 +682,14 @@ function buildDisplayTourName(params: {
   const lowerHeader = headerTitle.toLowerCase();
   const activityLabel = activityDisplayLabel(tourCategory);
 
+  const regularTitle = matchRegularTourTitle(headerTitle);
+  if (regularTitle) {
+    if (shipName && !regularTitle.toLowerCase().includes(shipName.toLowerCase())) {
+      return `${regularTitle} · ${shipName}`;
+    }
+    return regularTitle;
+  }
+
   const isGenericHeader =
     lowerHeader.startsWith('group booking') ||
     lowerHeader.startsWith('multyday');
@@ -616,17 +698,18 @@ function buildDisplayTourName(params: {
     if (shipName) {
       return `${shipName} · ${activityLabel}`;
     }
-    const partnerMatch = /\b(best arctic|baraka|delta of scandinavia|intrepid|nordic tours|s\.h\.tours)\b/i.exec(
-      cellText
-    );
-    if (partnerMatch) {
-      return `${partnerMatch[0]} · ${activityLabel}`;
+    const partner = KNOWN_PARTNERS.find((p) => p.pattern.test(cellText));
+    if (partner) {
+      return `${partner.label} · ${activityLabel}`;
+    }
+    if (/\bprivate\b/i.test(cellText)) {
+      return `Private · ${activityLabel}`;
     }
     return `${activityLabel} (${headerTitle})`;
   }
 
   if (shipName && !lowerHeader.includes(shipName.toLowerCase())) {
-    return `${headerTitle} (${shipName})`;
+    return `${headerTitle} · ${shipName}`;
   }
 
   return headerTitle || 'Scheduled Tour';
@@ -1078,7 +1161,7 @@ export function parseGuideAssignments(
       const maxShipCol = Math.max(c + 8, SHIP_COL_BB_INDEX);
       for (let s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
         if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship' || s === SHIP_COL_BB_INDEX) {
-          const val = (row[s] || '').toString().trim();
+          const val = normalizeShipCellValue((row[s] || '').toString());
           if (val) {
             shipName = val;
             commentCols1Based.push(s + 1);
@@ -1370,7 +1453,7 @@ export function parseCompanyDayOperations(
       const maxShipCol = Math.max(c + 8, SHIP_COL_BB_INDEX);
       for (let s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
         if (normalizeHeader(headerRow[s]).toLowerCase() === 'ship' || s === SHIP_COL_BB_INDEX) {
-          const val = (row[s] || '').toString().trim();
+          const val = normalizeShipCellValue((row[s] || '').toString());
           if (val) {
             shipName = val;
             commentCols1Based.push(s + 1);

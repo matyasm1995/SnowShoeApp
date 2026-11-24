@@ -40,6 +40,7 @@ interface Props {
   dateIso: string;
   guideName: string;
   tripName: string;
+  rawHeader?: string;
   initialPax: number;
   isHillHike: boolean;
   hillHikeLocation: string;
@@ -53,6 +54,7 @@ export function TripReportModal({
   dateIso,
   guideName,
   tripName,
+  rawHeader,
   initialPax,
   isHillHike,
   hillHikeLocation,
@@ -69,7 +71,7 @@ export function TripReportModal({
 
   useEffect(() => {
     if (visible) {
-      const matched = matchFormTripOption(tripName, isHillHike);
+      const matched = matchFormTripOption(tripName, isHillHike, rawHeader);
       setSelectedTrip(matched);
       setOtherTripText(matched === 'Other' ? tripName : '');
       setShowTripPicker(false);
@@ -77,7 +79,7 @@ export function TripReportModal({
       setSelectedPeak(isHillHike ? hillHikeLocation : '');
       setNotes('');
     }
-  }, [visible, tripName, isHillHike, initialPax, hillHikeLocation]);
+  }, [visible, tripName, rawHeader, isHillHike, initialPax, hillHikeLocation]);
 
   const buildPayload = (): TripReportPayload => ({
     tourKey,

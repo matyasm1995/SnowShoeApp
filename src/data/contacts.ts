@@ -210,7 +210,7 @@ export const SHIP_CONTACTS: readonly ContactEntry[] = [
     name: 'MS Midnatsol',
     category: 'hurtigruten',
     phone: '51007160',
-    keywords: ['midnatsol'],
+    keywords: ['midnatsol', 'midnattsol'],
   },
 ];
 

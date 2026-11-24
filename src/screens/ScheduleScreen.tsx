@@ -18,6 +18,7 @@ import {
   Bell,
   Briefcase,
   Bus,
+  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -36,6 +37,7 @@ import {
   X,
 } from 'lucide-react-native';
 
+import { ScheduleCalendarModal } from '../components/ScheduleCalendarModal';
 import { TripReportModal } from '../components/TripReportModal';
 import { WeatherAlertModal } from '../components/WeatherAlertModal';
 import { WeatherIcon } from '../components/WeatherIcon';
@@ -135,6 +137,7 @@ export function ScheduleScreen() {
     selectAssignment,
     selectManualRoute,
     shiftDate,
+    selectDate,
     resetToToday,
     syncNow,
     reloadProfileAndCache,
@@ -152,6 +155,7 @@ export function ScheduleScreen() {
   const [showNextMonth, setShowNextMonth] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showGuideNotesModal, setShowGuideNotesModal] = useState(false);
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [weatherAlerts, setWeatherAlerts] = useState<WeatherAlertItem[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<WeatherAlertItem | null>(null);
   const [inspectedCompanyTour, setInspectedCompanyTour] = useState<CompanyDayTour | null>(null);
@@ -453,10 +457,25 @@ export function ScheduleScreen() {
           <ChevronLeft color={colors.text} size={22} />
         </Pressable>
 
-        <Pressable onPress={resetToToday} style={styles.dateCenter}>
-          <Text style={styles.dateLabelText}>{dateLabel}</Text>
-          {!isToday ? <Text style={styles.todayTap}>TAP FOR TODAY</Text> : null}
+        <Pressable
+          onPress={() => setShowCalendarModal(true)}
+          style={({ pressed }) => [styles.dateCenter, pressed && styles.pressed]}
+        >
+          <View style={styles.dateCenterRow}>
+            <Calendar color={colors.accent} size={15} />
+            <Text style={styles.dateLabelText}>{dateLabel}</Text>
+          </View>
+          <Text style={styles.datePickerHint}>TAP FOR CALENDAR</Text>
         </Pressable>
+
+        {!isToday ? (
+          <Pressable
+            onPress={resetToToday}
+            style={({ pressed }) => [styles.todayQuickBtn, pressed && styles.pressed]}
+          >
+            <Text style={styles.todayQuickText}>Today</Text>
+          </Pressable>
+        ) : null}
 
         <Pressable
           onPress={() => shiftDate(1)}
@@ -935,8 +954,8 @@ export function ScheduleScreen() {
                 <Text style={styles.summitName}>Tverrfjellet (524m) →</Text>
                 <Text style={styles.summitWind}>
                   {tverrSummary.hasData
-                    ? `${tverrSummary.peakWindMs.toFixed(1)} m/s ${
-                        tverrSummary.dirDeg !== null ? windCardinal(tverrSummary.dirDeg) : ''
+                    ? `Max ${tverrSummary.peakWindMs.toFixed(1)} m/s${
+                        tverrSummary.dirDeg !== null ? ` ${windCardinal(tverrSummary.dirDeg)}` : ''
                       }`
                     : '—'}
                 </Text>
@@ -958,8 +977,8 @@ export function ScheduleScreen() {
                 <Text style={styles.summitName}>Rundfjellet (472m) →</Text>
                 <Text style={styles.summitWind}>
                   {rundSummary.hasData
-                    ? `${rundSummary.peakWindMs.toFixed(1)} m/s ${
-                        rundSummary.dirDeg !== null ? windCardinal(rundSummary.dirDeg) : ''
+                    ? `Max ${rundSummary.peakWindMs.toFixed(1)} m/s${
+                        rundSummary.dirDeg !== null ? ` ${windCardinal(rundSummary.dirDeg)}` : ''
                       }`
                     : '—'}
                 </Text>
@@ -1017,7 +1036,7 @@ export function ScheduleScreen() {
                     : '—'}
                 </Text>
                 <Text style={styles.singleSummaryWind}>
-                  Wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
+                  Max wind {coffeeSummary.peakWindMs.toFixed(1)} m/s{' '}
                   {coffeeSummary.dirDeg !== null ? windCardinal(coffeeSummary.dirDeg) : ''} · Gust{' '}
                   {Math.round(coffeeSummary.peakGustMs)} m/s
                 </Text>
@@ -1073,7 +1092,7 @@ export function ScheduleScreen() {
                   : '—'}
               </Text>
               <Text style={styles.singleSummaryWind}>
-                Wind {charlSummary.peakWindMs.toFixed(1)} m/s{' '}
+                Max wind {charlSummary.peakWindMs.toFixed(1)} m/s{' '}
                 {charlSummary.dirDeg !== null ? windCardinal(charlSummary.dirDeg) : ''} · Gust{' '}
                 {Math.round(charlSummary.peakGustMs)} m/s
               </Text>
@@ -1231,6 +1250,7 @@ export function ScheduleScreen() {
           dateIso={dateKey}
           guideName={profile.fullName}
           tripName={directReport.tour.tourName}
+          rawHeader={directReport.tour.sheetColumnHeader}
           initialPax={directReport.tour.guestCount}
           isHillHike={directReport.tour.tourCategory === 'hill_hike'}
           hillHikeLocation={
@@ -1388,6 +1408,16 @@ export function ScheduleScreen() {
         alert={selectedAlert}
         onClose={() => setSelectedAlert(null)}
       />
+
+      <ScheduleCalendarModal
+        visible={showCalendarModal}
+        selectedDate={selectedDate}
+        syncData={syncData}
+        profile={profile}
+        onSelectDate={selectDate}
+        onSelectToday={resetToToday}
+        onClose={() => setShowCalendarModal(false)}
+      />
     </ScrollView>
   );
 }
@@ -1503,9 +1533,20 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   dateNavBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  dateCenter: { alignItems: 'center', paddingVertical: 4 },
+  dateCenter: { flex: 1, alignItems: 'center', paddingVertical: 4, gap: 1 },
+  dateCenterRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dateLabelText: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  todayTap: { color: colors.accent, fontSize: 10, fontWeight: '800' },
+  datePickerHint: { color: colors.textSecondary, fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  todayQuickBtn: {
+    backgroundColor: colors.accentDarkBg,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    marginRight: 2,
+  },
+  todayQuickText: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
   viewToggleRow: {
     flexDirection: 'row',
     backgroundColor: colors.surface,

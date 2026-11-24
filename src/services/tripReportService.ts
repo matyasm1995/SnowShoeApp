@@ -45,12 +45,16 @@ export interface SubmittedTripReportRecord {
   notes: string;
 }
 
-export function matchFormTripOption(rawTourName: string, isHillHike: boolean): FormTripOption {
+export function matchFormTripOption(
+  rawTourName: string,
+  isHillHike: boolean,
+  rawHeader?: string
+): FormTripOption {
   if (isHillHike) {
     return '5hr snowshoe hill hike at 9:30';
   }
 
-  const lower = rawTourName.toLowerCase();
+  const lower = `${rawTourName} ${rawHeader ?? ''}`.toLowerCase();
 
   if (lower.includes('coffe') || lower.includes('coffee') || lower.includes('cafe')) {
     return 'Coffee trip at 9:00';
@@ -59,7 +63,7 @@ export function matchFormTripOption(rawTourName: string, isHillHike: boolean): F
   const isShip =
     lower.includes('14:15') ||
     lower.includes('14.15') ||
-    lower.includes('hg') ||
+    /\bhg\b/i.test(lower) ||
     lower.includes('m5') ||
     lower.includes('n5') ||
     lower.includes('hurtigruten') ||
@@ -73,6 +77,7 @@ export function matchFormTripOption(rawTourName: string, isHillHike: boolean): F
   if (lower.includes('ski')) {
     if (isShip) return 'HG ski at 14:15';
     if (
+      lower.includes('afternoon') ||
       lower.includes('13:30') ||
       lower.includes('13.30') ||
       lower.includes('14:30') ||
