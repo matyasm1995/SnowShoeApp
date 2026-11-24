@@ -40,17 +40,18 @@ The bottom bar has five tabs, plus a **red `+` Emergency button** in the top-rig
 ## 3. Schedule Tab (Daily Dispatch)
 
 ### Syncing & Date Navigation
-- **Auto-Sync:** Syncs automatically when stale (>30 minutes) and runs quiet background syncs during the day/afternoon.
-- **Manual Sync:** Tap the orange **Refresh** button (or pull down to refresh) whenever you want the latest sheet data.
-- **Date Arrows (`<` / `>`):** Browse past or future days. Tap the date in the center (`TAP FOR TODAY`) to jump back to today.
+- **Auto-Sync:** Syncs automatically when stale (>30 minutes) whenever you open or return to the app.
+- **Manual Sync & iTicket:** Tap the orange **Refresh** button (or pull down) for the latest sheet data, or tap **iTicket** to jump straight to the booking portal.
+- **Date Arrows & 6-Week Calendar Picker:** Use `<` / `>` to step day-by-day, tap the center date to open the **6-week Calendar Picker** (with color-coded dots for Tour, Day Off, and Base), or tap **Today** to jump back.
 
-### Notices & Reminders
+### Notices, Guide Notes & Reminders
+- **Guide Notes (Col L):** Daily operational notes from the sheet appear directly below the schedule toggle—tap **Read →** for full text and comments.
 - **Manager Noticeboard:** Appears at the top when office notices are active (`Critical`, `Warning`, or `Info`). Tap to read full text or dismiss non-critical notices.
 - **Post-Trip Report Reminder:** An amber banner appears after a tour ends if you haven't submitted its report yet. Tap **Fill Report →** to submit right away.
 
 ### My Schedule vs. All Trips
 - Use the top toggle (**My Schedule** | **All Trips**) right below the date bar—**My Schedule** is always shown first.
-- Switch to **All Trips** on any date to view every active company tour, assigned guide(s), vehicle overview (`Caravelle #2/#3/#4`, `Minibus`, `Taxi`), Rental Center (`Col C`), and Guides on Duty (`Col AP`). Tap any company tour to inspect its raw sheet details.
+- Switch to **All Trips** on any date to view every active company tour (including unassigned future yellow/booked trips), assigned guide(s), vehicle overview (`Caravelle #2/#3/#4`, `Minibus`, `Taxi`), Rental Center (`Col C`), and Guides on Duty (`Col AP`). Tap any company tour to inspect its raw sheet details.
 
 ### Today's Tours & Status
 Each assigned tour card shows:
@@ -60,7 +61,7 @@ Each assigned tour card shows:
   - `BOOKED · UNCONFIRMED` (Yellow cell)
   - `CLOSED` (Red cell)
   - Cancelled/strikethrough tours are automatically hidden.
-- **Ship & Vehicle Badges:** Hurtigruten/Havila ship name (if applicable) and assigned vehicle (`Caravelle #2/#3/#4`, `Minibus`, `Taxi`, etc.).
+- **Ship & Vehicle Badges:** Hurtigruten/Havila ship name (extracted from Column `BB` on HG tours) and assigned vehicle (`Caravelle #2/#3/#4`, `Minibus`, `Taxi`, etc.).
 - **Pax Count & Icons:** Expected guest count, report status, and a comment icon if office notes/comments exist.
 
 **On 0-tour days** (or when combined with a tour), the **Duty Status** card automatically checks:
@@ -68,7 +69,7 @@ Each assigned tour card shows:
 - Displays whether you are on **Rental Center**, **Guiding — No Tour Assigned**, **Base / Workshop Duty**, or **Day Off**.
 
 ### Weather Conditions Card
-Shows the forecast for your tour's location and time window (or **Charlottenlund** on 0-tour days). Tap it to jump directly to the full forecast for that location and time slot.
+Shows the peak (`Max`) wind and forecast for your tour's location and time window (or **Charlottenlund** on 0-tour days). Tap it to jump directly to the full forecast for that location and time slot.
 
 ### Overview & Company Trips
 - **Upcoming Schedule (30 Days):** Expand to see a quick day-by-day list of tours, Rental Center shifts, and days off. Tap any row to jump to that date.
@@ -79,21 +80,21 @@ Shows the forecast for your tour's location and time window (or **Charlottenlund
 ## 4. Tour Overview (Tap Any Tour Card)
 
 1. **Tour Briefing Card:**
-   - Tour title, time, ship name, **meeting point** (afternoon `14:15` / `HG` ship trips default to `Prostneset`), assigned vehicle, and **Back at car** target time.
-   - **Sheet Details · Raw Cell:** Tap to open the **Sheet Details** modal with selectable full text of the raw schedule cell, cell note, and all office comments/replies—nothing from the sheet is ever hidden.
+   - Clean tour title, time, coastal cruise ship name, **meeting point** (afternoon `14:15` / `HG` ship trips default to `Prostneset`), assigned vehicle, and **Back at car** target time.
+   - **Sheet Details · Raw Cell:** Tap to open the **Sheet Details** modal with selectable full text of the raw schedule cell, original column header, cell note, and all office comments/replies—nothing from the sheet is ever hidden.
 2. **Auto-Pinned Tour Contacts:**
    - Automatically surfaces relevant ship or dock phone numbers (e.g., Hurtigruten/Havila ship & reception) with one-tap **Call** buttons.
 3. **Hill Hike Mountain Picker (Hill Hikes only):**
-   - Switch between **Tverrfjellet (524m)** and **Rundfjellet (472m)** with live summit wind and drive time (`45m` vs `30m`).
+   - Switch between **Tverrfjellet (524m)** and **Rundfjellet (472m)** with live `Max` summit wind during the tour window and drive time (`45m` vs `30m`).
 4. **Tour Window Weather & Safety Warnings:**
-   - Tap **Tour Window Weather** for the full forecast.
-   - Directly below the weather box, view **NVE Varsom Avalanche** (Region `3011` Tromsø), **clickable Yr / MET Weather Warnings** (tap for full description, consequences, advice, or to open Yr.no), and **Kvaløya Bridge Gust Alerts** (`≥ 20 m/s`).
+   - Tap **Tour Window Weather** for the full forecast (shows Bottom & Top temp and `max` window wind).
+   - Directly below the weather box, view **NVE Varsom Avalanche** (Region `3011` Tromsø), **clickable Yr / MET Weather Warnings** (with full multi-day start/end dates; tap for full description, consequences, advice, or to open Yr.no), and **Kvaløya Bridge Gust Alerts** (`≥ 20 m/s`).
 5. **Trail Tracking & Equipment Checklist:**
    - Tap **Open Trail & Gate Tracking** (available on tracked routes like Tverrfjellet, Rundfjellet, and Fatbike) to start GPS pacing.
    - Check off gear before departure. Tap **Edit / Kits** to switch kits, create custom kits, or add/remove items.
-6. **Post-Trip Report:**
-   - Sits at the bottom before/during the tour, and automatically moves near the top once the tour ends until submitted.
-   - Pre-filled with date, your name, trip type, attended pax (uses your Roster count if entered), and Hill Hike mountain. Saves offline and **auto-syncs** when back online.
+6. **Post-Trip Report & Accident Form:**
+   - **Post-Trip Report** sits at the bottom before/during the tour, and automatically moves near the top once the tour ends until submitted. Pre-filled with date, your name, trip type, attended pax (uses your Roster count if entered), and Hill Hike mountain. Saves offline and **auto-syncs** when back online.
+   - **Accident / Incident Report Form:** Direct link right underneath Post-Trip Report if an accident or incident occurred during the trip.
 
 ---
 
@@ -146,8 +147,9 @@ Available on **Tverrfjellet**, **Rundfjellet**, and **Fatbike (Tromsøya North)*
 
 ## 9. Notifications
 
-- **Tomorrow's Schedule (18:30):** Daily summary of tomorrow's tours (or Day Off / Rental Center / Base Duty) with a `synced HH:MM` timestamp. Background sync refreshes the schedule in the afternoon so late sheet changes are caught; if a change arrives after 18:30, you'll receive an **Updated** notice.
-- **Post-Trip Report Reminder:** Fires 15 minutes after a scheduled tour ends if the report hasn't been submitted yet.
+- **Tomorrow's Schedule (18:30 Live Push):** Sent directly from the live 1.6 Google Sheet in the evening (works even with the screen locked or Battery Saver on) with a `synced HH:MM` timestamp. Tapping the notification opens **tomorrow’s schedule** directly and syncs the latest data.
+- **Post-Trip Report Reminder:** Fires 15 minutes after a scheduled tour ends if the report hasn't been submitted yet. Tapping the notification opens the **Post-Trip Report** form directly.
+- You can verify live push registration anytime at the bottom of **Settings** (`18:30 Dispatch Push: Active (Live Server)`).
 
 ---
 
@@ -158,4 +160,5 @@ Accessible from the top-right corner of every screen, even offline:
 - **Active Area / Tour:** Shown when on an active tour or tracking session so you can read your location name immediately to dispatchers.
 - **One-Tap Actions:** **Call 113** (Norwegian Medical Emergency) and **Open Official Hjelp 113 App**.
 - **ASSIST Protocol:** Quick reference steps for managing an accident in the field.
+- **Accident / Incident Report Form:** Direct link below ASSIST to submit the official report after an incident.
 - **Key Offline Numbers:** Company emergency, office, towing, and taxi contacts ready to dial without internet.

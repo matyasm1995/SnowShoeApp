@@ -22,13 +22,14 @@ export const GUIDE_MANUAL_SECTIONS: readonly ManualSection[] = [
   {
     id: 'schedule',
     title: '2. Schedule & All Trips View',
-    summary: 'Daily dispatch, status colors, duty checks, and company overview.',
+    summary: 'Daily dispatch, calendar picker, status colors, duty checks, and company overview.',
     items: [
-      'Use the top toggle to switch between "My Schedule" (always shown first) and "All Trips" to see every company tour, assigned guide, and vehicle for the selected day.',
+      'Use the top toggle to switch between "My Schedule" (always shown first) and "All Trips" to see every booked company tour (including unassigned future yellow/booked trips), assigned guides, and vehicles.',
       'Status colors mirror the Google Sheet: Green = CONFIRMED, Yellow = BOOKED · UNCONFIRMED, Red = CLOSED. Strikethrough/cancelled tours are hidden.',
+      'Daily Guide Notes (Col L) appear right below the toggle when present — tap "Read →" for full notes and comments. Use the top "iTicket" button anytime to open the booking portal.',
       'On 0-tour days, the app checks Column C (Rental Center) and Column AP (Guides on Duty) before falling back to your staff column.',
-      'Tap the orange Refresh icon (or pull down) to sync anytime. Use < and > arrows to check past or future days, or tap the date to jump back to Today.',
-      'Expand "Upcoming Schedule (30 Days)" for a quick month view, or "Browse All Company Trips" for offline route checklists and reference info.',
+      'Tap the orange Refresh icon (or pull down) to sync anytime. Use < and > arrows to step day-by-day, tap the center date to open the 6-week Calendar Picker (with Tour / Day Off / Base dots), or tap "Today" to jump back.',
+      'Expand "Upcoming Schedule (30 Days)" for a quick list view, or "Browse All Company Trips" for offline route checklists and reference info.',
     ],
   },
   {
@@ -36,13 +37,13 @@ export const GUIDE_MANUAL_SECTIONS: readonly ManualSection[] = [
     title: '3. Tour Overview & Sheet Details',
     summary: 'Everything needed before, during, and after a tour.',
     items: [
-      'Briefing Card shows time, ship name, meeting point (14:15 / HG ship trips default to Prostneset), vehicle, and target "Back at car" time.',
-      'Tap "Sheet Details · Raw Cell" (or any Note / Office Comments box) to inspect the full, selectable schedule cell text, cell notes, and comment threads.',
+      'Briefing Card shows clean tour title, time, coastal cruise ship name (from Col BB on HG tours), meeting point (14:15 / HG ship trips default to Prostneset), vehicle, and target "Back at car" time.',
+      'Tap "Sheet Details · Raw Cell" (or any Note / Office Comments box) to inspect the full, selectable schedule cell text, original column header, cell notes, and comment threads.',
       'Auto-Pinned Contacts automatically display relevant Hurtigruten/Havila ship & reception numbers with one-tap Call buttons.',
-      'Hill Hikes include a morning Mountain Picker comparing live summit wind on Tverrfjellet vs. Rundfjellet.',
+      'Hill Hikes include a morning Mountain Picker comparing live Max summit wind during the tour window on Tverrfjellet vs. Rundfjellet.',
       'Tap any Yr / MET weather warning card below the weather box to read full descriptions, consequences, advice, or open Yr.no.',
       'Equipment Checklists are editable: tap "Edit / Kits" to switch kits, create custom kits, or add/remove items.',
-      'Post-Trip Report sits at the bottom before/during the tour, and moves near the top once the tour ends until submitted. Reports save offline and auto-send when back online.',
+      'Post-Trip Report sits at the bottom before/during the tour, and moves near the top once the tour ends until submitted. Reports save offline and auto-send when back online. If an accident occurred, use the "Accident / Incident Report Form" link right underneath.',
     ],
   },
   {
@@ -82,12 +83,12 @@ export const GUIDE_MANUAL_SECTIONS: readonly ManualSection[] = [
   {
     id: 'notifications-emergency',
     title: '7. Notifications & Emergency 113',
-    summary: 'Evening dispatch alerts and offline SOS tools.',
+    summary: 'Live evening dispatch push alerts and offline SOS tools.',
     items: [
-      '18:30 Tomorrow Dispatch: Summarizes tomorrow’s tours or duty status with a sync timestamp. Quiet background sync refreshes the sheet in the afternoon; if late edits arrive after 18:30, an Updated notice is sent.',
-      'Post-Trip Report Reminder: Fires 15 minutes after a tour ends if not yet submitted.',
-      'Tip for Android: Set TO Guides battery usage to "Unrestricted" in Android App Info for the most reliable afternoon background syncs.',
-      'Emergency · 113 (Red "+" button, top-right on every screen): Works 100% offline with live Decimal & DMS GPS coordinates (-32m Tromsø geoid offset), one-tap Call 113, Hjelp 113 shortcut, ASSIST accident steps, and company/towing/taxi numbers.',
+      '18:30 Tomorrow Dispatch (Live Push): Sent directly from the live 1.6 schedule sheet in the evening — works even when the phone is locked or in Battery Saver mode. Tap the notification to jump straight to tomorrow’s date and refresh.',
+      'Post-Trip Report Reminder: Fires 15 minutes after a tour ends if not yet submitted. Tap the notification to open the Post-Trip Report form directly.',
+      'Check Settings → bottom info card to confirm "18:30 Dispatch Push: Active (Live Server)". If you change your initials or contract type in Settings, save to update your push registration.',
+      'Emergency · 113 (Red "+" button, top-right on every screen): Works 100% offline with live Decimal & DMS GPS coordinates (-32m Tromsø geoid offset), one-tap Call 113, Hjelp 113 shortcut, ASSIST accident steps, Accident / Incident Report Form link, and company/towing/taxi numbers.',
     ],
   },
 ];
