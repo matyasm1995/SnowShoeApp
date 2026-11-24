@@ -37,6 +37,10 @@ import {
   type ContractType,
   type GuideProfile,
 } from '../services/googleSheetsService';
+import {
+  isServerPushRegistered,
+  registerDeviceForPushDispatch,
+} from '../services/notificationService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 
 const STORAGE_KEY_PREVIEW_ALERTS = 'pref:preview_alerts_v1';
@@ -53,6 +57,7 @@ export function SettingsScreen() {
   const [showManual, setShowManual] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [serverPushActive, setServerPushActive] = useState(false);
 
   const updateInfo = getInstalledUpdateInfo();
 
@@ -60,15 +65,17 @@ export function SettingsScreen() {
 
   useEffect(() => {
     void (async () => {
-      const [profile, rawPreview] = await Promise.all([
+      const [profile, rawPreview, pushReg] = await Promise.all([
         getGuideProfile(),
         AsyncStorage.getItem(STORAGE_KEY_PREVIEW_ALERTS),
+        isServerPushRegistered(),
       ]);
       setInitials(profile.initials);
       setFullName(profile.fullName);
       setContractType(profile.contractType);
       setDefaultMountain(profile.defaultMountain);
       setPreviewAlerts(rawPreview === 'true');
+      setServerPushActive(pushReg);
     })();
   }, []);
 
@@ -86,6 +93,8 @@ export function SettingsScreen() {
     };
     await saveGuideProfile(updated);
     await reloadProfileAndCache();
+    const ok = await registerDeviceForPushDispatch(updated, true);
+    setServerPushActive(ok);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     Alert.alert('Settings Saved', 'Profile preferences updated.');
@@ -374,6 +383,9 @@ export function SettingsScreen() {
         </Text>
         <Text style={styles.infoLine}>• Active Tab: {CONFIG.sheet.tabName}</Text>
         <Text style={styles.infoLine}>• Mode: Offline-First AsyncStorage</Text>
+        <Text style={styles.infoLine}>
+          • 18:30 Dispatch Push: {serverPushActive ? 'Active (Live Server)' : 'Local Fallback'}
+        </Text>
         <Text style={styles.infoLine}>• Weather API: MET Norway Locationforecast 2.0</Text>
         {updateInfo.shortId ? (
           <Text style={styles.infoLine}>

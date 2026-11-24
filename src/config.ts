@@ -26,5 +26,6 @@ export const CONFIG = {
   app: {
     version: '1.7.0',
     name: 'TO Guides',
+    expoProjectId: '32601f54-1560-4dec-b95d-5b658b010900',
   },
 } as const;

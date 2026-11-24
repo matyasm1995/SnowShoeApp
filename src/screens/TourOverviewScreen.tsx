@@ -1,6 +1,6 @@
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Linking,
   Modal,
@@ -70,12 +70,13 @@ import { formatClock, formatTemperature, osloDateKey } from '../utils/format';
 
 export type ScheduleStackParamList = {
   ScheduleHome: undefined;
-  TourOverview: undefined;
+  TourOverview: { openReport?: boolean; reportTriggerId?: number } | undefined;
   DetailedWeather: { spotId?: string } | undefined;
   Tracking: undefined;
 };
 
 type NavProp = NativeStackNavigationProp<ScheduleStackParamList, 'TourOverview'>;
+type OverviewRouteProp = RouteProp<ScheduleStackParamList, 'TourOverview'>;
 
 function getOsloMinutes(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -91,6 +92,7 @@ function getOsloMinutes(date: Date): number {
 
 export function TourOverviewScreen() {
   const navigation = useNavigation<NavProp>();
+  const route = useRoute<OverviewRouteProp>();
   const {
     profile,
     activeAssignment,
@@ -122,6 +124,19 @@ export function TourOverviewScreen() {
   const [avalanche, setAvalanche] = useState<AvalancheWarning | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showSheetDetailsModal, setShowSheetDetailsModal] = useState(false);
+  const lastReportTriggerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const triggerId = route.params?.reportTriggerId ?? null;
+    if (
+      route.params?.openReport &&
+      activeAssignment &&
+      triggerId !== lastReportTriggerRef.current
+    ) {
+      lastReportTriggerRef.current = triggerId;
+      setShowReportModal(true);
+    }
+  }, [route.params?.openReport, route.params?.reportTriggerId, activeAssignment]);
 
   const [editingKit, setEditingKit] = useState(false);
   const [newItemText, setNewItemText] = useState('');

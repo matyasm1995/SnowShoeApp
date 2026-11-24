@@ -1,3 +1,9 @@
+const fs = require('fs');
+const path = require('path');
+
+const googleServicesPath = path.join(__dirname, 'google-services.json');
+const hasGoogleServices = fs.existsSync(googleServicesPath);
+
 module.exports = {
   expo: {
     name: "TO Guides",
@@ -15,7 +21,8 @@ module.exports = {
     },
     android: {
       package: "com.toguides.app",
-      versionCode: 9,
+      versionCode: 11,
+      ...(hasGoogleServices ? { googleServicesFile: "./google-services.json" } : {}),
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#0B0D10"

@@ -212,46 +212,105 @@ function MainTabsNavigator() {
   );
 }
 
+function parseIsoDateLocalNoon(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const year = parseInt(m[1] ?? '', 10);
+  const month = parseInt(m[2] ?? '', 10);
+  const day = parseInt(m[3] ?? '', 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return new Date(year, month - 1, day, 12, 0, 0);
+}
+
 function AppShell() {
   const [currentRouteName, setCurrentRouteName] = useState<string | undefined>('ScheduleHome');
+  const [navReady, setNavReady] = useState(false);
+  const [pendingNotifData, setPendingNotifData] = useState<Record<string, unknown> | null>(null);
   const { trackedRoute } = useTracking();
-  const { setupChecked, needsSetup, selectManualRoute } = useActiveTour();
+  const {
+    setupChecked,
+    needsSetup,
+    selectManualRoute,
+    selectDate,
+    selectAssignment,
+    syncNow,
+  } = useActiveTour();
 
   useEffect(() => {
     // 1. Notification tapped when app is open or in background
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data;
-      if (data?.tourKey) {
-        if (navRef.isReady()) {
-          navRef.navigate('MainTabs', {
-            screen: 'Schedule',
-            params: { screen: 'TourOverview' },
-          });
-        }
-      } else if (data?.targetDateIso) {
-        if (navRef.isReady()) {
-          navRef.navigate('MainTabs', {
-            screen: 'Schedule',
-            params: { screen: 'ScheduleHome' },
-          });
-        }
+      if (data && typeof data === 'object') {
+        setPendingNotifData({ ...(data as Record<string, unknown>), _handledAt: Date.now() });
       }
     });
 
     // 2. Notification tapped when app was completely killed / cold launched
     void Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (response?.notification.request.content.data?.tourKey) {
-        if (navRef.isReady()) {
-          navRef.navigate('MainTabs', {
-            screen: 'Schedule',
-            params: { screen: 'TourOverview' },
-          });
-        }
+      const data = response?.notification.request.content.data;
+      if (data && typeof data === 'object') {
+        setPendingNotifData({ ...(data as Record<string, unknown>), _handledAt: Date.now() });
       }
     });
 
     return () => sub.remove();
   }, []);
+
+  useEffect(() => {
+    if (!pendingNotifData || !setupChecked || needsSetup || !navReady || !navRef.isReady()) {
+      return;
+    }
+
+    const data = pendingNotifData;
+    setPendingNotifData(null);
+
+    if (data.tourKey || data.openReport === true || data.type === 'trip_report') {
+      if (typeof data.dateIso === 'string') {
+        const parsedDate = parseIsoDateLocalNoon(data.dateIso);
+        if (parsedDate) {
+          selectDate(parsedDate);
+        }
+      }
+      if (typeof data.tourIdx === 'number' && Number.isFinite(data.tourIdx) && data.tourIdx >= 0) {
+        selectAssignment(data.tourIdx);
+      }
+      navRef.navigate('MainTabs', {
+        screen: 'Schedule',
+        params: {
+          screen: 'TourOverview',
+          params: { openReport: true, reportTriggerId: Date.now() },
+        },
+      });
+      return;
+    }
+
+    if (typeof data.targetDateIso === 'string' || data.type === 'tomorrow_dispatch') {
+      const parsedDate =
+        typeof data.targetDateIso === 'string'
+          ? parseIsoDateLocalNoon(data.targetDateIso)
+          : null;
+      if (parsedDate) {
+        selectDate(parsedDate);
+      } else {
+        const tmr = new Date();
+        tmr.setDate(tmr.getDate() + 1);
+        selectDate(tmr);
+      }
+      navRef.navigate('MainTabs', {
+        screen: 'Schedule',
+        params: { screen: 'ScheduleHome' },
+      });
+      void syncNow().catch(() => {});
+    }
+  }, [
+    pendingNotifData,
+    setupChecked,
+    needsSetup,
+    navReady,
+    selectDate,
+    selectAssignment,
+    syncNow,
+  ]);
 
   useEffect(() => {
     if (setupChecked && !needsSetup) {
@@ -286,6 +345,7 @@ function AppShell() {
       ref={navRef}
       theme={navigationTheme}
       onReady={() => {
+        setNavReady(true);
         setCurrentRouteName(navRef.getCurrentRoute()?.name);
       }}
       onStateChange={() => {

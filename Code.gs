@@ -395,7 +395,15 @@ function doGet(e) {
 
 function doPost(e) {
   try {
-    var body = JSON.parse(e.postData.contents || "{}");
+    var body = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+
+    if (body.action === "register_push") {
+      return handleRegisterPush(body);
+    }
+    if (body.action === "unregister_push") {
+      return handleUnregisterPush(body);
+    }
+
     var pairs = [
       "fvv=1",
       "pageHistory=0",
@@ -466,6 +474,653 @@ function doPost(e) {
       }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// ============================================================================
+// SERVER-SIDE 18:30 PUSH NOTIFICATIONS (Expo Push API)
+// ============================================================================
+
+var EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+var PUSH_SUBSCRIBERS_PROP_KEY = "PUSH_SUBSCRIBERS_V1";
+var PUSH_RENTAL_COL = 2;      // Column C
+var PUSH_GUIDES_DUTY_COL = 41; // Column AP
+var PUSH_SHIP_COL_BB = 53;    // Column BB
+var PUSH_STAFF_START = 68;    // Column BQ
+var PUSH_STAFF_END = 105;     // Column DB
+var PUSH_MICHAL_COL = 95;
+
+var PUSH_AMBIGUOUS_INITIALS = {
+  to: 1, he: 1, "in": 1, no: 1, at: 1, on: 1, or: 1, as: 1, is: 1, by: 1,
+  an: 1, am: 1, pm: 1, so: 1, "do": 1, go: 1, up: 1, my: 1, we: 1, me: 1,
+  be: 1, "if": 1, of: 1, it: 1, us: 1, ok: 1
+};
+
+var PUSH_SHIP_KEYWORDS = [
+  { name: "Havila Capella", keywords: ["capella"] },
+  { name: "Havila Castor", keywords: ["castor"] },
+  { name: "Havila Polaris", keywords: ["polaris"] },
+  { name: "Havila Pollux", keywords: ["pollux"] },
+  { name: "MS Kong Harald", keywords: ["kong harald"] },
+  { name: "MS Nordkapp", keywords: ["nordkapp"] },
+  { name: "MS Nordlys", keywords: ["nordlys"] },
+  { name: "MS Nordnorge", keywords: ["nordnorge"] },
+  { name: "MS Polarlys", keywords: ["polarlys"] },
+  { name: "MS Richard With", keywords: ["richard with"] },
+  { name: "MS Trollfjord", keywords: ["trollfjord"] },
+  { name: "MS Finnmarken", keywords: ["finnmarken"] },
+  { name: "MS Vesterålen", keywords: ["vesterålen", "vesteralen"] },
+  { name: "MS Midnatsol", keywords: ["midnatsol", "midnattsol"] }
+];
+
+var PUSH_PARTNERS = [
+  { pattern: /\bnext\s+travel\s+nordic\b/i, label: "Next Travel Nordic" },
+  { pattern: /\bdelta\s+of\s+scandinavia\b/i, label: "Delta of Scandinavia" },
+  { pattern: /\bbest\s+arctic\b/i, label: "Best Arctic" },
+  { pattern: /\bnordic\s+tours\b/i, label: "Nordic Tours" },
+  { pattern: /\bbaraka\b/i, label: "Baraka" },
+  { pattern: /\bintrepid\b/i, label: "Intrepid" },
+  { pattern: /\bs\.h\.tours\b/i, label: "S.H.Tours" },
+  { pattern: /\btui\b/i, label: "TUI" },
+  { pattern: /\becs\b/i, label: "ECS" }
+];
+
+function jsonOut(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function loadPushSubscribers() {
+  var raw = PropertiesService.getScriptProperties().getProperty(PUSH_SUBSCRIBERS_PROP_KEY);
+  if (!raw) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function savePushSubscribers(map) {
+  PropertiesService.getScriptProperties().setProperty(
+    PUSH_SUBSCRIBERS_PROP_KEY,
+    JSON.stringify(map || {})
+  );
+}
+
+function handleRegisterPush(body) {
+  var token = String(body.token || "").trim();
+  var initials = String(body.initials || "").trim();
+  var fullName = String(body.fullName || "").trim();
+  var contractType = String(body.contractType || "full-time").trim();
+
+  var validToken =
+    token.indexOf("ExponentPushToken[") === 0 ||
+    token.indexOf("ExpoPushToken[") === 0;
+  if (!validToken || !initials) {
+    return jsonOut({ status: "error", message: "Missing valid Expo push token or initials." });
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var subs = loadPushSubscribers();
+    subs[token] = {
+      token: token,
+      initials: initials,
+      fullName: fullName,
+      contractType: contractType === "part-time" ? "part-time" : "full-time",
+      updatedAt: new Date().toISOString()
+    };
+    savePushSubscribers(subs);
+  } finally {
+    lock.releaseLock();
+  }
+
+  return jsonOut({ status: "success", registered: true });
+}
+
+function handleUnregisterPush(body) {
+  var token = String(body.token || "").trim();
+  if (!token) return jsonOut({ status: "success", removed: false });
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var subs = loadPushSubscribers();
+    if (subs[token]) {
+      delete subs[token];
+      savePushSubscribers(subs);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  return jsonOut({ status: "success", removed: true });
+}
+
+function pushNormalizeHeader(val) {
+  return String(val || "").replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function pushParseIntOrZero(val) {
+  var n = parseInt(String(val || "").trim(), 10);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+function pushCellContainsInitials(cellValue, guideInitials) {
+  var targetClean = String(guideInitials || "").trim();
+  if (!targetClean) return false;
+  var targetLower = targetClean.toLowerCase();
+  var raw = String(cellValue || "").trim();
+  if (!raw) return false;
+
+  var tokens = raw.split(/[^A-Za-z0-9ÆØÅæøå]+/).filter(function(t) { return t.length > 0; });
+  if (tokens.length === 0) return false;
+
+  var isAmbiguous = Boolean(PUSH_AMBIGUOUS_INITIALS[targetLower]);
+  var allShort = tokens.every(function(t) { return t.length <= 3 && !/^\d+$/.test(t); });
+
+  for (var i = 0; i < tokens.length; i++) {
+    var tok = tokens[i];
+    if (tok.toLowerCase() !== targetLower) continue;
+    if (!isAmbiguous) return true;
+    if (/[A-ZÆØÅ]/.test(tok) || allShort) return true;
+  }
+  return false;
+}
+
+function pushIsTourColumn(colIndex, headerText) {
+  var clean = String(headerText || "").trim();
+  if (!clean) return false;
+  var lower = clean.toLowerCase();
+
+  if (
+    lower.indexOf("meeting") !== -1 ||
+    lower.indexOf("on duty") !== -1 ||
+    lower.indexOf("available guides") !== -1 ||
+    lower.indexOf("needed guides") !== -1 ||
+    lower.indexOf("workshop") !== -1 ||
+    lower.indexOf("tasks") !== -1 ||
+    lower.indexOf("deliver") !== -1 ||
+    lower.indexOf("pick up") !== -1 ||
+    lower.indexOf("extra opening") !== -1 ||
+    lower === "t-ø" ||
+    lower === "t-o" ||
+    lower === "l-s" ||
+    lower === "forecast" ||
+    lower === "on board" ||
+    lower === "shop" ||
+    lower === "ship" ||
+    lower === "pax" ||
+    lower === "minibus" ||
+    lower.indexOf("caravelle") === 0
+  ) {
+    return false;
+  }
+
+  return (
+    (colIndex >= 22 && colIndex <= 39) ||
+    (colIndex >= 44 && colIndex <= 53) ||
+    (colIndex >= 54 && colIndex <= 63)
+  );
+}
+
+function pushFormatHHMM(minutes) {
+  var h = Math.floor(minutes / 60) % 24;
+  var m = minutes % 60;
+  return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+}
+
+function pushParseStartTime(text) {
+  if (!text) return null;
+  var rangeRegex = /\b(\d{1,2})([:.])\s*(\d{2})\s*[-–]\s*(\d{1,2})(?:([:.])\s*(\d{2}))?\b/g;
+  var match;
+  while ((match = rangeRegex.exec(text)) !== null) {
+    var sh = parseInt(match[1], 10);
+    var sSep = match[2];
+    var sm = parseInt(match[3], 10);
+    var eh = parseInt(match[4], 10);
+    var eSep = match[5];
+    var em = match[6] ? parseInt(match[6], 10) : 0;
+    if (sh >= 7 && sh <= 23 && sm >= 0 && sm <= 59 && eh >= 7 && eh <= 23 && em >= 0 && em <= 59) {
+      if (sSep === "." && match[6] && eSep === "." && (sm % 5 !== 0 || em % 5 !== 0)) continue;
+      if (eh * 60 + em > sh * 60 + sm) {
+        return { startMinutes: sh * 60 + sm, startLabel: pushFormatHHMM(sh * 60 + sm) };
+      }
+    }
+  }
+
+  var singleRegex = /(?:^|\s|at\s+)(\d{1,2})([:.])\s*(\d{2})(?!\.\d)\b/gi;
+  var smatch;
+  while ((smatch = singleRegex.exec(text)) !== null) {
+    var h = parseInt(smatch[1], 10);
+    var sep = smatch[2];
+    var m = parseInt(smatch[3], 10);
+    if (h >= 7 && h <= 23 && m >= 0 && m <= 59) {
+      if (sep === "." && m % 5 !== 0) continue;
+      return { startMinutes: h * 60 + m, startLabel: pushFormatHHMM(h * 60 + m) };
+    }
+  }
+  return null;
+}
+
+function pushDetectShip(text) {
+  var lower = String(text || "").toLowerCase();
+  for (var i = 0; i < PUSH_SHIP_KEYWORDS.length; i++) {
+    var entry = PUSH_SHIP_KEYWORDS[i];
+    for (var j = 0; j < entry.keywords.length; j++) {
+      if (lower.indexOf(entry.keywords[j]) !== -1) return entry.name;
+    }
+  }
+  var mein = /mein\s*schiff(?:\s*\d+)?/i.exec(text || "");
+  if (mein) return mein[0].replace(/\s+/g, " ").trim();
+  if (/fred\s*olsen/i.test(text || "")) return "Fred Olsen";
+  if (/\b(?:ms\s*)?hamburg\b/i.test(text || "")) return "MS Hamburg";
+  return null;
+}
+
+function pushInferCategory(headerTitle, cellText) {
+  var combined = (headerTitle + " " + cellText).toLowerCase();
+  if (
+    combined.indexOf("coffe") !== -1 ||
+    combined.indexOf("coffee") !== -1 ||
+    combined.indexOf("cafe") !== -1 ||
+    combined.indexOf("tove") !== -1 ||
+    combined.indexOf("malangen") !== -1
+  ) return "Coffee Trip";
+  if (combined.indexOf("fatbik") !== -1 || combined.indexOf("bike") !== -1) return "Fatbike";
+  if (
+    combined.indexOf("hill hike") !== -1 ||
+    combined.indexOf("brosmetind") !== -1 ||
+    combined.indexOf("nattmål") !== -1 ||
+    combined.indexOf("tverrfjell") !== -1 ||
+    combined.indexOf("rundfjell") !== -1 ||
+    combined.indexOf("sightseeing hike") !== -1 ||
+    combined.indexOf("hike") !== -1
+  ) return "Hill Hike";
+  if (combined.indexOf("snowshoe") !== -1) return "Snowshoe Trip";
+  if (combined.indexOf("ski") !== -1) return "Ski Trip";
+  if (
+    combined.indexOf("trollfjord") !== -1 ||
+    combined.indexOf("finnmarken") !== -1 ||
+    combined.indexOf("midnatsol") !== -1 ||
+    combined.indexOf("midnattsol") !== -1
+  ) return "Ski Trip";
+  return "Snowshoe Trip";
+}
+
+function pushMatchRegularTitle(headerTitle) {
+  var lower = String(headerTitle || "").toLowerCase();
+  if (/\bm5\b/.test(lower) || (lower.indexOf("ski") !== -1 && /14[:.]15/.test(lower))) return "HG ski trip";
+  if (/\bn5\b/.test(lower) || (lower.indexOf("snowshoe") !== -1 && /14[:.]15/.test(lower))) return "HG snowshoe trip";
+  if (lower.indexOf("coffe") !== -1 || lower.indexOf("coffee") !== -1) return "Coffee trip";
+  if (lower.indexOf("fatbik") !== -1) return "Fatbike trip";
+  if (lower.indexOf("brosmetind") !== -1 || lower.indexOf("sightseeing hike") !== -1) return "Sightseeing hike";
+  if (lower.indexOf("w 104") !== -1 || lower.indexOf("hill hike") !== -1) return "Hill hike";
+  if (lower.indexOf("w 103") !== -1 || (lower.indexOf("snowshoe") !== -1 && /10[:.]00/.test(lower))) return "Easy snowshoe trip";
+  if (lower.indexOf("w 101") !== -1 || lower.indexOf("ski trip") !== -1) {
+    if (/13[:.]30|14[:.]00|afternoon/.test(lower)) return "Ski trip afternoon";
+    return "Ski trip morning";
+  }
+  return null;
+}
+
+function pushBuildDisplayName(headerTitle, cellText, shipName) {
+  var regular = pushMatchRegularTitle(headerTitle);
+  if (regular) {
+    if (shipName && regular.toLowerCase().indexOf(shipName.toLowerCase()) === -1) {
+      return regular + " · " + shipName;
+    }
+    return regular;
+  }
+
+  var lowerHeader = String(headerTitle || "").toLowerCase();
+  var actLabel = pushInferCategory(headerTitle, cellText);
+  if (lowerHeader.indexOf("group booking") === 0 || lowerHeader.indexOf("multyday") === 0) {
+    if (shipName) return shipName + " · " + actLabel;
+    for (var i = 0; i < PUSH_PARTNERS.length; i++) {
+      if (PUSH_PARTNERS[i].pattern.test(cellText)) {
+        return PUSH_PARTNERS[i].label + " · " + actLabel;
+      }
+    }
+    if (/\bprivate\b/i.test(cellText)) return "Private · " + actLabel;
+    return actLabel + " (" + headerTitle + ")";
+  }
+  if (shipName && lowerHeader.indexOf(shipName.toLowerCase()) === -1) {
+    return headerTitle + " · " + shipName;
+  }
+  return headerTitle || "Scheduled Tour";
+}
+
+function pushFindRowForOsloDate(values, monthName, dayNum) {
+  var currentMonth = "";
+  for (var r = 0; r < values.length; r++) {
+    var row = values[r] || [];
+    var col0 = String(row[0] || "").trim().toUpperCase();
+    if (MONTH_NAMES.indexOf(col0) !== -1) {
+      currentMonth = col0;
+      continue;
+    }
+    var col1Day = parseInt(String(row[1] || "").trim(), 10);
+    if (currentMonth === monthName && col1Day === dayNum) {
+      return r;
+    }
+  }
+  return -1;
+}
+
+function pushFindStaffCol(headerRow, subscriber) {
+  var targetName = String(subscriber.fullName || "").trim().toLowerCase();
+  var maxCol = Math.min(PUSH_STAFF_END, headerRow.length - 1);
+  for (var c = PUSH_STAFF_START; c <= maxCol; c++) {
+    var h = pushNormalizeHeader(headerRow[c]).toLowerCase();
+    if (targetName && h.indexOf(targetName) !== -1) return c;
+  }
+  if (
+    (targetName === "michal" || String(subscriber.initials || "").trim().toLowerCase() === "mh") &&
+    headerRow.length > PUSH_MICHAL_COL
+  ) {
+    return PUSH_MICHAL_COL;
+  }
+  return -1;
+}
+
+function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, dayLabel, syncedClock) {
+  var initials = String(subscriber.initials || "").trim();
+  var tours = [];
+
+  for (var c = 22; c < Math.min(66, headerRow.length); c++) {
+    var headerTitle = pushNormalizeHeader(headerRow[c]);
+    if (!pushIsTourColumn(c, headerTitle)) continue;
+
+    var cellText = String(row[c] || "").trim();
+    if (!cellText) continue;
+
+    var fl = String((fontLineRow && fontLineRow[c]) || "").toLowerCase();
+    if (fl.indexOf("line-through") !== -1) continue;
+
+    if (!pushCellContainsInitials(cellText, initials)) continue;
+
+    var h1 = pushNormalizeHeader(headerRow[c + 1]).toLowerCase();
+    var h2 = pushNormalizeHeader(headerRow[c + 2]).toLowerCase();
+    var h3 = pushNormalizeHeader(headerRow[c + 3]).toLowerCase();
+    var isShipBlock = h1 === "forecast" && h2 === "on board" && h3 === "shop";
+
+    var guestCount = 0;
+    var shipName = null;
+    if (isShipBlock) {
+      guestCount = pushParseIntOrZero(row[c + 2]) + pushParseIntOrZero(row[c + 3]);
+      var maxShipCol = Math.max(c + 8, PUSH_SHIP_COL_BB);
+      for (var s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
+        if (pushNormalizeHeader(headerRow[s]).toLowerCase() === "ship" || s === PUSH_SHIP_COL_BB) {
+          var rawShip = String(row[s] || "").trim();
+          if (rawShip) {
+            shipName = pushDetectShip(rawShip) || rawShip;
+            break;
+          }
+        }
+      }
+    } else {
+      guestCount = pushParseIntOrZero(row[c + 1]);
+      if (guestCount === 0) {
+        var inlinePax = /(\d+)\s*pax\b/i.exec(cellText);
+        if (inlinePax && inlinePax[1]) guestCount = pushParseIntOrZero(inlinePax[1]);
+      }
+    }
+
+    if (!shipName) {
+      shipName = pushDetectShip(cellText);
+    }
+
+    var parsedTime = pushParseStartTime(cellText) || pushParseStartTime(headerTitle);
+    var displayName = pushBuildDisplayName(headerTitle, cellText, shipName);
+
+    tours.push({
+      tourName: displayName,
+      startMinutes: parsedTime ? parsedTime.startMinutes : 9999,
+      startLabel: parsedTime ? parsedTime.startLabel : "",
+      guestCount: guestCount
+    });
+  }
+
+  tours.sort(function(a, b) { return a.startMinutes - b.startMinutes; });
+
+  // Check Rental Center (Col C) and Guides on Duty (Col AP)
+  var rentalCol = PUSH_RENTAL_COL;
+  for (var rc = 0; rc <= Math.min(10, headerRow.length - 1); rc++) {
+    var rh = pushNormalizeHeader(headerRow[rc]).toLowerCase();
+    if (rh.indexOf("rental center") !== -1 || rh.indexOf("rental centre") !== -1) {
+      rentalCol = rc;
+      break;
+    }
+  }
+  var guidesCol = PUSH_GUIDES_DUTY_COL;
+  for (var gc = 20; gc < Math.min(PUSH_STAFF_START, headerRow.length); gc++) {
+    if (pushNormalizeHeader(headerRow[gc]).toLowerCase().indexOf("guides on duty") !== -1) {
+      guidesCol = gc;
+      break;
+    }
+  }
+
+  var rawRental = String(row[rentalCol] || "").trim();
+  var rawGuides = String(row[guidesCol] || "").trim();
+  var inRental = pushCellContainsInitials(rawRental, initials);
+  var inGuides = pushCellContainsInitials(rawGuides, initials);
+
+  var title = "Tomorrow's Schedule (" + dayLabel + ")";
+  var body = "";
+
+  if (tours.length > 0) {
+    var summaries = tours.map(function(t) {
+      var timePrefix = t.startLabel ? t.startLabel + " " : "";
+      var paxSuffix = t.guestCount > 0 ? " (" + t.guestCount + " pax)" : "";
+      return timePrefix + t.tourName + paxSuffix;
+    });
+    if (inRental) summaries.push("Rental Center");
+    body = summaries.join(" · ");
+  } else if (inRental && inGuides) {
+    title = "Tomorrow: Rental Center + Guiding (" + dayLabel + ")";
+    body = 'Listed in Rental Center ("' + rawRental + '") and Guides on Duty.';
+  } else if (inRental) {
+    title = "Tomorrow: Rental Center (" + dayLabel + ")";
+    body = 'Listed in Rental Center (Col C): "' + rawRental + '".';
+  } else if (inGuides) {
+    title = "Tomorrow: Guiding — No Tour Assigned (" + dayLabel + ")";
+    body = "Listed in Guides on Duty (Col AP), with no tour assigned yet.";
+  } else {
+    var staffCol = pushFindStaffCol(headerRow, subscriber);
+    var isPartTime = subscriber.contractType === "part-time";
+    var staffCell = staffCol !== -1 ? String(row[staffCol] || "").trim() : "";
+    var staffLower = staffCell.toLowerCase();
+
+    var isOff = false;
+    if (staffCol === -1) {
+      isOff = isPartTime;
+    } else if (!staffLower) {
+      isOff = isPartTime;
+    } else if (
+      pushCellContainsInitials(staffCell, initials) ||
+      staffLower.indexOf("off") !== -1 ||
+      staffLower.indexOf("holiday") !== -1 ||
+      staffLower.indexOf("avspasering") !== -1 ||
+      staffLower.indexOf("unpaid") !== -1 ||
+      staffLower.indexOf("leave") !== -1 ||
+      staffLower.indexOf("request") !== -1 ||
+      staffLower.indexOf("permisjon") !== -1
+    ) {
+      isOff = true;
+    } else if (
+      staffLower.indexOf("work") !== -1 ||
+      staffLower.indexOf("rc") !== -1 ||
+      staffLower.indexOf("sato") !== -1 ||
+      staffLower.indexOf("first aid") !== -1 ||
+      staffLower.indexOf("training") !== -1 ||
+      staffLower.indexOf("inventory") !== -1 ||
+      staffLower.indexOf("email") !== -1 ||
+      staffLower.indexOf("guiding") !== -1 ||
+      staffLower.indexOf("course") !== -1 ||
+      staffLower.indexOf("military") !== -1
+    ) {
+      isOff = false;
+    } else {
+      isOff = !isPartTime;
+    }
+
+    if (isOff) {
+      title = "Tomorrow: Day Off (" + dayLabel + ")";
+      body = "No tours or shift assigned tomorrow. Enjoy your day off!";
+    } else {
+      title = "Tomorrow: Base / Workshop Duty (" + dayLabel + ")";
+      body = staffCell
+        ? 'Schedule note: "' + staffCell + '".'
+        : "On duty at Tromsø Outdoor tomorrow.";
+    }
+  }
+
+  return {
+    title: title,
+    body: body + " · synced " + syncedClock
+  };
+}
+
+/**
+ * Daily 18:30 Europe/Oslo trigger target:
+ * Reads the live 1.6 schedule sheet right now and pushes each registered guide's
+ * tomorrow schedule directly via Expo Push API (bypasses Android Doze / Battery Saver).
+ */
+function sendDailyTomorrowNotifications() {
+  var subs = loadPushSubscribers();
+  var tokens = Object.keys(subs);
+  if (tokens.length === 0) {
+    Logger.log("No registered push subscribers yet.");
+    return;
+  }
+
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheets()[0];
+  if (!sheet) {
+    Logger.log("Main schedule sheet not found.");
+    return;
+  }
+
+  var lastRow = Math.min(sheet.getLastRow(), MAX_ROWS);
+  var lastCol = Math.min(sheet.getLastColumn(), MAX_COLS);
+  var range = sheet.getRange(1, 1, lastRow, lastCol);
+  var values = range.getValues();
+  var fontLines = range.getFontLines();
+  var headerRow = values[1] || [];
+
+  var now = new Date();
+  var tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  var monthIdx = parseInt(Utilities.formatDate(tomorrow, "Europe/Oslo", "M"), 10) - 1;
+  var dayNum = parseInt(Utilities.formatDate(tomorrow, "Europe/Oslo", "d"), 10);
+  var monthName = MONTH_NAMES[monthIdx] || "";
+  var tomorrowIso = Utilities.formatDate(tomorrow, "Europe/Oslo", "yyyy-MM-dd");
+  var dayLabel = Utilities.formatDate(tomorrow, "Europe/Oslo", "EEE d MMM");
+  var syncedClock = Utilities.formatDate(now, "Europe/Oslo", "HH:mm");
+
+  var rowIdx = pushFindRowForOsloDate(values, monthName, dayNum);
+  if (rowIdx === -1) {
+    Logger.log("Could not find sheet row for tomorrow (" + monthName + " " + dayNum + ").");
+    return;
+  }
+
+  var row = values[rowIdx] || [];
+  var fontLineRow = fontLines[rowIdx] || [];
+  var messages = [];
+
+  for (var i = 0; i < tokens.length; i++) {
+    var sub = subs[tokens[i]];
+    if (!sub || !sub.token || !sub.initials) continue;
+    var msg = pushBuildNotificationForGuide(headerRow, row, fontLineRow, sub, dayLabel, syncedClock);
+    messages.push({
+      to: sub.token,
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+      title: msg.title,
+      body: msg.body,
+      data: {
+        type: "tomorrow_dispatch",
+        targetDateIso: tomorrowIso
+      }
+    });
+  }
+
+  var staleTokens = [];
+  for (var b = 0; b < messages.length; b += 100) {
+    var chunk = messages.slice(b, b + 100);
+    var res = UrlFetchApp.fetch(EXPO_PUSH_URL, {
+      method: "post",
+      contentType: "application/json",
+      headers: { Accept: "application/json" },
+      payload: JSON.stringify(chunk),
+      muteHttpExceptions: true
+    });
+    Logger.log("Expo Push HTTP " + res.getResponseCode() + ": " + res.getContentText());
+
+    try {
+      var parsed = JSON.parse(res.getContentText());
+      var tickets = Array.isArray(parsed.data) ? parsed.data : [];
+      for (var t = 0; t < tickets.length; t++) {
+        var ticket = tickets[t];
+        if (ticket && ticket.status === "error" && ticket.details && ticket.details.error === "DeviceNotRegistered") {
+          staleTokens.push(chunk[t].to);
+        }
+      }
+    } catch (parseErr) {}
+  }
+
+  if (staleTokens.length > 0) {
+    var lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      var currentSubs = loadPushSubscribers();
+      for (var s = 0; s < staleTokens.length; s++) {
+        delete currentSubs[staleTokens[s]];
+      }
+      savePushSubscribers(currentSubs);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  Logger.log("Sent " + messages.length + " tomorrow schedule notifications for " + tomorrowIso + ".");
+}
+
+/**
+ * Run ONCE in Apps Script Editor to schedule the daily 18:30 Europe/Oslo trigger.
+ */
+function setupDaily1830Trigger() {
+  var existing = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < existing.length; i++) {
+    if (existing[i].getHandlerFunction() === "sendDailyTomorrowNotifications") {
+      ScriptApp.deleteTrigger(existing[i]);
+    }
+  }
+  ScriptApp.newTrigger("sendDailyTomorrowNotifications")
+    .timeBased()
+    .inTimezone("Europe/Oslo")
+    .everyDays(1)
+    .atHour(18)
+    .nearMinute(30)
+    .create();
+  Logger.log("Daily ~18:30 Europe/Oslo trigger created for sendDailyTomorrowNotifications.");
+}
+
+/**
+ * Helper: run in Apps Script Editor to inspect registered guide devices.
+ */
+function listPushSubscribers() {
+  var subs = loadPushSubscribers();
+  Logger.log(JSON.stringify(subs, null, 2));
+}
+
+/**
+ * Helper: run in Apps Script Editor to immediately test sending tomorrow's push.
+ */
+function testSendNotificationsNow() {
+  sendDailyTomorrowNotifications();
 }
 
 function testAuth() {

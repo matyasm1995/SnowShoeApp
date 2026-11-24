@@ -38,6 +38,7 @@ import {
   type ManagerNoteItem,
 } from '../services/managerNotesService';
 import {
+  registerDeviceForPushDispatch,
   scheduleTomorrowDispatchNotification,
   syncTripReportNotifications,
 } from '../services/notificationService';
@@ -275,6 +276,11 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
       selectedDate
     );
   }, [syncData, profile.initials, selectedDate]);
+
+  useEffect(() => {
+    if (needsSetup) return;
+    void registerDeviceForPushDispatch(profile);
+  }, [needsSetup, profile]);
 
   useEffect(() => {
     if (needsSetup) return;

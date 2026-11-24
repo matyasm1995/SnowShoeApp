@@ -2,20 +2,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
+import { CONFIG } from '../config';
 import { formatClock, osloDateKey } from '../utils/format';
 import type {
   DutyStatus,
   GuideAssignment,
+  GuideProfile,
 } from './googleSheetsService';
 import type { SubmittedTripReportRecord } from './tripReportService';
 
 const ASKED_NOTIF_KEY = 'pref:asked_notifications_v1';
 const LAST_TOMORROW_DISPATCH_KEY = 'pref:last_tomorrow_dispatch_v1';
+const PUSH_REGISTRATION_KEY = 'pref:push_registration_v1';
 const TOMORROW_DISPATCH_NOTIF_ID = 'arctic-guide-tomorrow-dispatch';
+const PUSH_REREGISTER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface LastTomorrowDispatchRecord {
   targetDateKey: string;
   fingerprint: string;
+}
+
+interface PushRegistrationRecord {
+  token: string;
+  initials: string;
+  fullName: string;
+  contractType: string;
+  registeredAtIso: string;
 }
 
 Notifications.setNotificationHandler({
@@ -57,6 +69,92 @@ async function ensureNotificationPermission(): Promise<boolean> {
     }
     return false;
   } catch {
+    return false;
+  }
+}
+
+export async function isServerPushRegistered(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(PUSH_REGISTRATION_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<PushRegistrationRecord>;
+    return Boolean(parsed.token && parsed.initials);
+  } catch {
+    return false;
+  }
+}
+
+export async function registerDeviceForPushDispatch(
+  profile: GuideProfile,
+  force = false
+): Promise<boolean> {
+  try {
+    const cleanInitials = profile.initials.trim();
+    const cleanName = profile.fullName.trim();
+    if (!cleanInitials || !cleanName) return false;
+
+    const granted = await ensureNotificationPermission();
+    if (!granted) return false;
+
+    const tokenResp = await Notifications.getExpoPushTokenAsync({
+      projectId: CONFIG.app.expoProjectId,
+    });
+    const token = tokenResp?.data?.trim();
+    if (!token) return false;
+
+    if (!force) {
+      try {
+        const rawPrev = await AsyncStorage.getItem(PUSH_REGISTRATION_KEY);
+        if (rawPrev) {
+          const prev = JSON.parse(rawPrev) as PushRegistrationRecord;
+          const ageMs = Date.now() - Date.parse(prev.registeredAtIso || '');
+          if (
+            prev.token === token &&
+            prev.initials === cleanInitials &&
+            prev.fullName === cleanName &&
+            prev.contractType === profile.contractType &&
+            Number.isFinite(ageMs) &&
+            ageMs < PUSH_REREGISTER_INTERVAL_MS
+          ) {
+            return true;
+          }
+        }
+      } catch {}
+    }
+
+    const res = await fetch(CONFIG.sheet.scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'register_push',
+        token,
+        initials: cleanInitials,
+        fullName: cleanName,
+        contractType: profile.contractType,
+      }),
+    });
+
+    if (!res.ok) return false;
+    const json = (await res.json().catch(() => null)) as { status?: string } | null;
+    if (json?.status !== 'success') return false;
+
+    const record: PushRegistrationRecord = {
+      token,
+      initials: cleanInitials,
+      fullName: cleanName,
+      contractType: profile.contractType,
+      registeredAtIso: new Date().toISOString(),
+    };
+    await AsyncStorage.setItem(PUSH_REGISTRATION_KEY, JSON.stringify(record));
+
+    // Server push is now active — cancel any local 18:30 fallback alarm to avoid duplicates
+    try {
+      await Notifications.cancelScheduledNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
+    } catch {}
+
+    return true;
+  } catch {
+    // Expected before FCM / google-services.json is built into the native binary
     return false;
   }
 }
@@ -114,8 +212,14 @@ export async function syncTripReportNotifications(
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Post-Trip Report Reminder',
-          body: `${tour.tourName} finished — don’t forget to submit your trip report.`,
-          data: { tourKey },
+          body: `${tour.tourName} finished — tap to fill out your trip report.`,
+          data: {
+            type: 'trip_report',
+            tourKey,
+            tourIdx: idx,
+            dateIso: todayKey,
+            openReport: true,
+          },
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -163,6 +267,15 @@ export async function scheduleTomorrowDispatchNotification(params: {
   notifyIfChangedAfterDispatch?: boolean;
 }): Promise<void> {
   try {
+    // If server-side 18:30 push from Code.gs is registered, skip local 18:30 scheduling
+    // so guides only receive the single fresh server-pushed notification.
+    if (await isServerPushRegistered()) {
+      try {
+        await Notifications.cancelScheduledNotificationAsync(TOMORROW_DISPATCH_NOTIF_ID);
+      } catch {}
+      return;
+    }
+
     const granted = await ensureNotificationPermission();
     if (!granted) return;
 
@@ -220,7 +333,6 @@ export async function scheduleTomorrowDispatchNotification(params: {
 
     // If 18:30 has already passed today (or is <5s away): only send an immediate follow-up
     // if called from background sync and tomorrow's schedule changed since last dispatch.
-    // Reusing TOMORROW_DISPATCH_NOTIF_ID replaces the previous 18:30 notification in-place.
     if (target1830.getTime() <= now.getTime() + 5000) {
       const changedSinceLastDispatch =
         params.notifyIfChangedAfterDispatch === true &&
@@ -239,7 +351,7 @@ export async function scheduleTomorrowDispatchNotification(params: {
           content: {
             title: `Tomorrow's Schedule Updated (${dayName})`,
             body,
-            data: { targetDateIso: targetDateKey },
+            data: { type: 'tomorrow_dispatch', targetDateIso: targetDateKey },
           },
           trigger: null,
         });
@@ -257,7 +369,7 @@ export async function scheduleTomorrowDispatchNotification(params: {
       content: {
         title,
         body,
-        data: { targetDateIso: targetDateKey },
+        data: { type: 'tomorrow_dispatch', targetDateIso: targetDateKey },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
