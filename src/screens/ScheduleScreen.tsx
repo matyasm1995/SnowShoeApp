@@ -683,7 +683,8 @@ export function ScheduleScreen() {
                   onPress={() => setInspectedCompanyTour(ct)}
                   style={({ pressed }) => [
                     styles.tourCard,
-                    ct.isMine && styles.tourCardMine,
+                    ct.isMine &&
+                      (ct.myRole === 'driver' ? styles.tourCardDriver : styles.tourCardMine),
                     pressed && styles.pressed,
                   ]}
                 >
@@ -959,7 +960,11 @@ export function ScheduleScreen() {
           <Pressable
             key={`${tour.tourName}-${idx}`}
             onPress={() => openTour(idx)}
-            style={({ pressed }) => [styles.tourCard, pressed && styles.pressed]}
+            style={({ pressed }) => [
+              styles.tourCard,
+              isDriverOnly && styles.tourCardDriver,
+              pressed && styles.pressed,
+            ]}
           >
             <View style={styles.tourHeader}>
               <Text style={styles.tourTag}>
@@ -1786,6 +1791,7 @@ const styles = StyleSheet.create({
   },
   emptyAllCard: { padding: 14, alignItems: 'center' },
   tourCardMine: { borderColor: colors.accent },
+  tourCardDriver: { borderColor: colors.ice },
   mineBadge: {
     backgroundColor: colors.accentDarkBg,
     borderColor: colors.accent,
