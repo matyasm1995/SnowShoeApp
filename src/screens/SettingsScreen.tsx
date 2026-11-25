@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import {
   AlertTriangle,
+  Bell,
   BookOpen,
   Building2,
   Check,
@@ -42,6 +43,12 @@ import {
   isServerPushRegistered,
   registerDeviceForPushDispatch,
 } from '../services/notificationService';
+import {
+  enableWebPushNotifications,
+  getWebPushStatus,
+  syncWebPushIfGranted,
+  type WebPushStatus,
+} from '../services/webPushService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 
 const STORAGE_KEY_PREVIEW_ALERTS = 'pref:preview_alerts_v1';
@@ -59,6 +66,9 @@ export function SettingsScreen() {
   const [updateReady, setUpdateReady] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [serverPushActive, setServerPushActive] = useState(false);
+  const [webPushStatus, setWebPushStatus] = useState<WebPushStatus>('unsupported');
+  const [webPushBusy, setWebPushBusy] = useState(false);
+  const [webPushMessage, setWebPushMessage] = useState<string | null>(null);
 
   const updateInfo = getInstalledUpdateInfo();
 
@@ -66,10 +76,11 @@ export function SettingsScreen() {
 
   useEffect(() => {
     void (async () => {
-      const [profile, rawPreview, pushReg] = await Promise.all([
+      const [profile, rawPreview, pushReg, wpStatus] = await Promise.all([
         getGuideProfile(),
         AsyncStorage.getItem(STORAGE_KEY_PREVIEW_ALERTS),
         isServerPushRegistered(),
+        getWebPushStatus(),
       ]);
       setInitials(profile.initials);
       setFullName(profile.fullName);
@@ -77,12 +88,31 @@ export function SettingsScreen() {
       setDefaultMountain(profile.defaultMountain);
       setPreviewAlerts(rawPreview === 'true');
       setServerPushActive(pushReg);
+      setWebPushStatus(wpStatus);
     })();
   }, []);
 
   const togglePreviewAlerts = async (val: boolean) => {
     setPreviewAlerts(val);
     await AsyncStorage.setItem(STORAGE_KEY_PREVIEW_ALERTS, val ? 'true' : 'false');
+  };
+
+  const handleEnableWebPush = async () => {
+    setWebPushBusy(true);
+    setWebPushMessage(null);
+    try {
+      const currentProfile: GuideProfile = {
+        initials: initials.trim() || CONFIG.defaults.guideInitials,
+        fullName: fullName.trim() || CONFIG.defaults.guideFullName,
+        contractType,
+        defaultMountain,
+      };
+      const res = await enableWebPushNotifications(currentProfile);
+      setWebPushStatus(res.status);
+      setWebPushMessage(res.message);
+    } finally {
+      setWebPushBusy(false);
+    }
   };
 
   const handleSave = async () => {
@@ -94,11 +124,21 @@ export function SettingsScreen() {
     };
     await saveGuideProfile(updated);
     await reloadProfileAndCache();
-    const ok = await registerDeviceForPushDispatch(updated, true);
-    setServerPushActive(ok);
+    if (Platform.OS === 'web') {
+      const ok = await syncWebPushIfGranted(updated, true);
+      if (ok) {
+        setWebPushStatus('active');
+        setWebPushMessage('Profile & 18:30 push updated.');
+      }
+    } else {
+      const ok = await registerDeviceForPushDispatch(updated, true);
+      setServerPushActive(ok);
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
-    Alert.alert('Settings Saved', 'Profile preferences updated.');
+    if (Platform.OS !== 'web') {
+      Alert.alert('Settings Saved', 'Profile preferences updated.');
+    }
   };
 
   const handleCheckUpdate = async () => {
@@ -312,6 +352,79 @@ export function SettingsScreen() {
         <Text style={styles.saveBtnText}>{saved ? 'Preferences Saved!' : 'Save Settings'}</Text>
       </Pressable>
 
+      {/* 4b. Web / iPhone PWA 18:30 Push Notifications */}
+      {Platform.OS === 'web' ? (
+        <View
+          style={[
+            sharedStyles.card,
+            styles.cardGap,
+            webPushStatus === 'active' && styles.webPushActiveCard,
+          ]}
+        >
+          <View style={styles.webPushHeader}>
+            <Bell
+              color={webPushStatus === 'active' ? colors.success : colors.accent}
+              size={20}
+            />
+            <View style={styles.contractTextCol}>
+              <Text style={styles.previewTitle}>
+                {webPushStatus === 'active'
+                  ? '18:30 Push Notifications Active'
+                  : '18:30 Tomorrow Schedule Push'}
+              </Text>
+              <Text style={styles.previewSub}>
+                {webPushStatus === 'needs_home_screen'
+                  ? 'On iPhone: tap Share → Add to Home Screen, then open TO Guides from the Home Screen icon to enable notifications.'
+                  : webPushStatus === 'denied'
+                    ? 'Notifications are blocked for this site. Enable them in your iPhone / browser notification settings.'
+                    : webPushStatus === 'unsupported'
+                      ? 'This browser does not support Web Push (requires iOS 16.4+ Home Screen app or Chrome/Safari).'
+                      : webPushStatus === 'active'
+                        ? 'This device will receive live 18:30 tomorrow schedule updates from Sheet 1.6.'
+                        : 'Tap below to allow live 18:30 tomorrow schedule push notifications on this device.'}
+              </Text>
+            </View>
+          </View>
+
+          {webPushStatus === 'prompt' || webPushStatus === 'active' ? (
+            <Pressable
+              onPress={() => void handleEnableWebPush()}
+              disabled={webPushBusy}
+              style={({ pressed }) => [
+                touchTarget,
+                webPushStatus === 'active' ? styles.webPushResyncBtn : styles.webPushEnableBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              {webPushBusy ? (
+                <ActivityIndicator
+                  color={webPushStatus === 'active' ? colors.text : colors.background}
+                  size="small"
+                />
+              ) : (
+                <Bell
+                  color={webPushStatus === 'active' ? colors.text : colors.background}
+                  size={18}
+                />
+              )}
+              <Text
+                style={
+                  webPushStatus === 'active'
+                    ? styles.webPushResyncText
+                    : styles.webPushEnableText
+                }
+              >
+                {webPushStatus === 'active'
+                  ? 'Re-sync Push Registration'
+                  : 'Enable 18:30 Push Notifications'}
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {webPushMessage ? <Text style={styles.webPushFeedback}>{webPushMessage}</Text> : null}
+        </View>
+      ) : null}
+
       {/* 5. Preview Warnings Toggle */}
       <View style={[sharedStyles.card, styles.previewRow]}>
         <AlertTriangle color={colors.warning} size={20} />
@@ -413,7 +526,11 @@ export function SettingsScreen() {
         <Text style={styles.infoLine}>
           • 18:30 Dispatch Push:{' '}
           {Platform.OS === 'web'
-            ? 'Web Push (Coming in Phase 2)'
+            ? webPushStatus === 'active'
+              ? 'Active (Web Push)'
+              : webPushStatus === 'needs_home_screen'
+                ? 'Add to Home Screen on iPhone'
+                : 'Not enabled yet'
             : serverPushActive
               ? 'Active (Live Server)'
               : 'Local Fallback'}
@@ -501,6 +618,46 @@ const styles = StyleSheet.create({
   },
   previewTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
   previewSub: { color: colors.textSecondary, fontSize: 12 },
+  webPushActiveCard: {
+    borderColor: colors.success,
+    backgroundColor: colors.successDarkBg,
+  },
+  webPushHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  webPushEnableBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  webPushEnableText: {
+    color: colors.background,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  webPushResyncBtn: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  webPushResyncText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  webPushFeedback: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
   infoCard: { alignItems: 'center', gap: 4, paddingVertical: 16 },
   infoTitle: { color: colors.textSecondary, fontSize: 13, fontWeight: '800' },
   infoLine: { color: colors.textSecondary, fontSize: 12 },

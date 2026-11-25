@@ -244,7 +244,41 @@ function AppShell() {
   } = useActiveTour();
 
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined') {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const iso = params.get('targetDateIso');
+          if (iso) {
+            setPendingNotifData({
+              type: 'tomorrow_dispatch',
+              targetDateIso: iso,
+              _handledAt: Date.now(),
+            });
+            params.delete('targetDateIso');
+            const qs = params.toString();
+            const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+            window.history.replaceState({}, '', cleanUrl);
+          }
+        } catch {}
+      }
+
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        const onSwMessage = (event: MessageEvent) => {
+          const msg = event.data as { type?: string; targetDateIso?: string } | null;
+          if (msg?.type === 'OPEN_SCHEDULE_DATE') {
+            setPendingNotifData({
+              type: 'tomorrow_dispatch',
+              targetDateIso: msg.targetDateIso || '',
+              _handledAt: Date.now(),
+            });
+          }
+        };
+        navigator.serviceWorker.addEventListener('message', onSwMessage);
+        return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
+      return;
+    }
 
     // 1. Notification tapped when app is open or in background
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {

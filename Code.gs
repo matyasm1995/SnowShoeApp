@@ -403,6 +403,12 @@ function doPost(e) {
     if (body.action === "unregister_push") {
       return handleUnregisterPush(body);
     }
+    if (body.action === "register_web_push") {
+      return handleRegisterWebPush(body);
+    }
+    if (body.action === "unregister_web_push") {
+      return handleUnregisterWebPush(body);
+    }
 
     var pairs = [
       "fvv=1",
@@ -991,8 +997,10 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
 function sendDailyTomorrowNotifications() {
   var subs = loadPushSubscribers();
   var tokens = Object.keys(subs);
-  if (tokens.length === 0) {
-    Logger.log("No registered push subscribers yet.");
+  var webSubsCheck = loadWebPushSubscribers();
+  var webTokensCheck = Object.keys(webSubsCheck);
+  if (tokens.length === 0 && webTokensCheck.length === 0) {
+    Logger.log("No registered Android or Web push subscribers yet.");
     return;
   }
 
@@ -1085,7 +1093,234 @@ function sendDailyTomorrowNotifications() {
     }
   }
 
-  Logger.log("Sent " + messages.length + " tomorrow schedule notifications for " + tomorrowIso + ".");
+  Logger.log("Sent " + messages.length + " Expo (Android) tomorrow notifications for " + tomorrowIso + ".");
+
+  // Also send FCM HTTP v1 Web Push notifications for iPhone PWA / Web guides
+  sendDailyWebPushNotifications(headerRow, row, fontLineRow, dayLabel, syncedClock, tomorrowIso);
+}
+
+// ============================================================================
+// WEB / iPHONE PWA PUSH NOTIFICATIONS (Firebase Cloud Messaging HTTP v1)
+// ============================================================================
+
+var WEB_PUSH_SUBSCRIBERS_PROP_KEY = "WEB_PUSH_SUBSCRIBERS_V1";
+var FCM_PROJECT_ID = "to-guides";
+var FCM_SEND_URL = "https://fcm.googleapis.com/v1/projects/" + FCM_PROJECT_ID + "/messages:send";
+var FCM_TOKEN_CACHE_KEY = "FCM_V1_ACCESS_TOKEN_CACHE";
+
+function loadWebPushSubscribers() {
+  var raw = PropertiesService.getScriptProperties().getProperty(WEB_PUSH_SUBSCRIBERS_PROP_KEY);
+  if (!raw) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveWebPushSubscribers(map) {
+  PropertiesService.getScriptProperties().setProperty(
+    WEB_PUSH_SUBSCRIBERS_PROP_KEY,
+    JSON.stringify(map || {})
+  );
+}
+
+function handleRegisterWebPush(body) {
+  var fcmToken = String(body.fcmToken || body.token || "").trim();
+  var initials = String(body.initials || "").trim();
+  var fullName = String(body.fullName || "").trim();
+  var contractType = String(body.contractType || "full-time").trim();
+
+  if (fcmToken.length < 30 || !initials) {
+    return jsonOut({ status: "error", message: "Missing valid FCM web token or initials." });
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var subs = loadWebPushSubscribers();
+    subs[fcmToken] = {
+      fcmToken: fcmToken,
+      initials: initials,
+      fullName: fullName,
+      contractType: contractType === "part-time" ? "part-time" : "full-time",
+      platform: "web",
+      updatedAt: new Date().toISOString()
+    };
+    saveWebPushSubscribers(subs);
+  } finally {
+    lock.releaseLock();
+  }
+
+  return jsonOut({ status: "success", registered: true, platform: "web" });
+}
+
+function handleUnregisterWebPush(body) {
+  var fcmToken = String(body.fcmToken || body.token || "").trim();
+  if (!fcmToken) return jsonOut({ status: "success", removed: false });
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var subs = loadWebPushSubscribers();
+    if (subs[fcmToken]) {
+      delete subs[fcmToken];
+      saveWebPushSubscribers(subs);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  return jsonOut({ status: "success", removed: true });
+}
+
+function base64UrlEncodeBytes(bytes) {
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, "");
+}
+
+function base64UrlEncodeJson(obj) {
+  return base64UrlEncodeBytes(Utilities.newBlob(JSON.stringify(obj)).getBytes());
+}
+
+/**
+ * Generates an OAuth2 access token for FCM HTTP v1 using Script Properties:
+ *   FCM_CLIENT_EMAIL  (from Firebase Service Account JSON -> client_email)
+ *   FCM_PRIVATE_KEY   (from Firebase Service Account JSON -> private_key)
+ */
+function getFcmV1AccessToken() {
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get(FCM_TOKEN_CACHE_KEY);
+  if (cached) return cached;
+
+  var props = PropertiesService.getScriptProperties();
+  var clientEmail = String(props.getProperty("FCM_CLIENT_EMAIL") || "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+  var rawKey = String(props.getProperty("FCM_PRIVATE_KEY") || "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!clientEmail || !rawKey) {
+    Logger.log("FCM_CLIENT_EMAIL or FCM_PRIVATE_KEY Script Properties not configured; skipping Web Push.");
+    return null;
+  }
+
+  // Handle literal "\n" sequences if pasted straight from the JSON file
+  var privateKeyPem = rawKey.replace(/\\n/g, "\n");
+  var nowSec = Math.floor(Date.now() / 1000);
+
+  var header = { alg: "RS256", typ: "JWT" };
+  var claimSet = {
+    iss: clientEmail,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: nowSec,
+    exp: nowSec + 3600
+  };
+
+  var signingInput = base64UrlEncodeJson(header) + "." + base64UrlEncodeJson(claimSet);
+  var sigBytes = Utilities.computeRsaSha256Signature(signingInput, privateKeyPem);
+  var jwt = signingInput + "." + base64UrlEncodeBytes(sigBytes);
+
+  var tokenRes = UrlFetchApp.fetch("https://oauth2.googleapis.com/token", {
+    method: "post",
+    contentType: "application/x-www-form-urlencoded",
+    payload:
+      "grant_type=" +
+      encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") +
+      "&assertion=" +
+      encodeURIComponent(jwt),
+    muteHttpExceptions: true
+  });
+
+  if (tokenRes.getResponseCode() !== 200) {
+    Logger.log("FCM OAuth2 token error HTTP " + tokenRes.getResponseCode() + ": " + tokenRes.getContentText());
+    return null;
+  }
+
+  var tokenJson = JSON.parse(tokenRes.getContentText());
+  if (!tokenJson.access_token) return null;
+
+  // Cache for 50 minutes (tokens are valid for 60 minutes)
+  cache.put(FCM_TOKEN_CACHE_KEY, tokenJson.access_token, 3000);
+  return tokenJson.access_token;
+}
+
+function sendDailyWebPushNotifications(headerRow, row, fontLineRow, dayLabel, syncedClock, tomorrowIso) {
+  var webSubs = loadWebPushSubscribers();
+  var webTokens = Object.keys(webSubs);
+  if (webTokens.length === 0) {
+    Logger.log("No registered Web / iPhone PWA push subscribers yet.");
+    return;
+  }
+
+  var accessToken = getFcmV1AccessToken();
+  if (!accessToken) return;
+
+  var staleWebTokens = [];
+  var sentCount = 0;
+
+  for (var i = 0; i < webTokens.length; i++) {
+    var sub = webSubs[webTokens[i]];
+    if (!sub || !sub.fcmToken || !sub.initials) continue;
+
+    var msg = pushBuildNotificationForGuide(headerRow, row, fontLineRow, sub, dayLabel, syncedClock);
+    var fcmPayload = {
+      message: {
+        token: sub.fcmToken,
+        data: {
+          title: msg.title,
+          body: msg.body,
+          type: "tomorrow_dispatch",
+          targetDateIso: tomorrowIso
+        },
+        webpush: {
+          headers: {
+            Urgency: "high",
+            TTL: "43200"
+          }
+        }
+      }
+    };
+
+    var res = UrlFetchApp.fetch(FCM_SEND_URL, {
+      method: "post",
+      contentType: "application/json",
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json"
+      },
+      payload: JSON.stringify(fcmPayload),
+      muteHttpExceptions: true
+    });
+
+    var code = res.getResponseCode();
+    var text = res.getContentText();
+    if (code >= 200 && code < 300) {
+      sentCount++;
+    } else {
+      Logger.log("FCM Web Push HTTP " + code + " for " + sub.initials + ": " + text);
+      if (code === 404 || text.indexOf("UNREGISTERED") !== -1) {
+        staleWebTokens.push(sub.fcmToken);
+      }
+    }
+  }
+
+  if (staleWebTokens.length > 0) {
+    var lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      var currentWebSubs = loadWebPushSubscribers();
+      for (var s = 0; s < staleWebTokens.length; s++) {
+        delete currentWebSubs[staleWebTokens[s]];
+      }
+      saveWebPushSubscribers(currentWebSubs);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  Logger.log("Sent " + sentCount + "/" + webTokens.length + " Web / iPhone PWA notifications for " + tomorrowIso + ".");
 }
 
 /**
@@ -1109,15 +1344,23 @@ function setupDaily1830Trigger() {
 }
 
 /**
- * Helper: run in Apps Script Editor to inspect registered guide devices.
+ * Helper: run in Apps Script Editor to inspect registered Android & iPhone/Web devices.
  */
 function listPushSubscribers() {
-  var subs = loadPushSubscribers();
-  Logger.log(JSON.stringify(subs, null, 2));
+  Logger.log("=== Android (Expo Push) ===\n" + JSON.stringify(loadPushSubscribers(), null, 2));
+  Logger.log("=== iPhone / Web (FCM v1) ===\n" + JSON.stringify(loadWebPushSubscribers(), null, 2));
 }
 
 /**
- * Helper: run in Apps Script Editor to immediately test sending tomorrow's push.
+ * Helper: run in Apps Script Editor to verify FCM_CLIENT_EMAIL & FCM_PRIVATE_KEY Script Properties.
+ */
+function testFcmAuth() {
+  var tok = getFcmV1AccessToken();
+  Logger.log(tok ? "FCM v1 OAuth2 OK! Token prefix: " + tok.slice(0, 20) + "..." : "FCM v1 auth failed — check Script Properties.");
+}
+
+/**
+ * Helper: run in Apps Script Editor to immediately test sending tomorrow's push to all devices.
  */
 function testSendNotificationsNow() {
   sendDailyTomorrowNotifications();

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { CONFIG } from '../config';
 import {
@@ -47,6 +47,7 @@ import {
   loadSubmittedReports,
   type SubmittedTripReportRecord,
 } from '../services/tripReportService';
+import { syncWebPushIfGranted } from '../services/webPushService';
 import { osloDateKey } from '../utils/format';
 
 const AUTO_SYNC_MAX_AGE_MS = 30 * 60 * 1000;
@@ -279,7 +280,11 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (needsSetup) return;
-    void registerDeviceForPushDispatch(profile);
+    if (Platform.OS === 'web') {
+      void syncWebPushIfGranted(profile);
+    } else {
+      void registerDeviceForPushDispatch(profile);
+    }
   }, [needsSetup, profile]);
 
   useEffect(() => {

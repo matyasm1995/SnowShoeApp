@@ -6,6 +6,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -78,6 +79,11 @@ import {
   summarizeForecastWindow,
   type ForecastWindowSummary,
 } from '../services/weatherService';
+import {
+  enableWebPushNotifications,
+  getWebPushStatus,
+  type WebPushStatus,
+} from '../services/webPushService';
 import { colors, sharedStyles, touchTarget } from '../theme';
 import { windCardinal } from '../utils/environmental';
 import { formatClock, formatTemperature, osloDateKey } from '../utils/format';
@@ -147,8 +153,25 @@ export function ScheduleScreen() {
 
   const { trackingActive } = useTracking();
   const [updateReady, setUpdateReady] = useState(false);
+  const [webPushStatus, setWebPushStatus] = useState<WebPushStatus>('unsupported');
+  const [webPushBusy, setWebPushBusy] = useState(false);
+  const [webPushDismissed, setWebPushDismissed] = useState(false);
 
   useEffect(() => subscribeUpdateReady(setUpdateReady), []);
+
+  const handleEnableWebPushBanner = useCallback(async () => {
+    if (Platform.OS !== 'web' || webPushBusy) return;
+    setWebPushBusy(true);
+    try {
+      const result = await enableWebPushNotifications(profile);
+      setWebPushStatus(result.status);
+      if (!result.ok && result.message && typeof window !== 'undefined') {
+        window.alert(result.message);
+      }
+    } finally {
+      setWebPushBusy(false);
+    }
+  }, [profile, webPushBusy]);
 
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const [showAllRoutes, setShowAllRoutes] = useState(false);
@@ -191,6 +214,11 @@ export function ScheduleScreen() {
     useCallback(() => {
       let active = true;
       void reloadProfileAndCache();
+      if (Platform.OS === 'web') {
+        void getWebPushStatus().then((s) => {
+          if (active) setWebPushStatus(s);
+        });
+      }
       void fetchWeatherAlerts(alertPoint, selectedDate).then((items) => {
         if (active) setWeatherAlerts(items);
       });
@@ -446,6 +474,44 @@ export function ScheduleScreen() {
           </Text>
           <Text style={styles.updateBannerAction}>Restart →</Text>
         </Pressable>
+      ) : null}
+
+      {/* 1c. Web / iPhone PWA 18:30 Push Notification Banner */}
+      {Platform.OS === 'web' &&
+      !webPushDismissed &&
+      (webPushStatus === 'prompt' || webPushStatus === 'needs_home_screen') ? (
+        <View style={styles.webPushBanner}>
+          {webPushStatus === 'prompt' ? (
+            <Pressable
+              onPress={() => void handleEnableWebPushBanner()}
+              disabled={webPushBusy}
+              style={({ pressed }) => [styles.webPushBannerMain, pressed && styles.pressed]}
+            >
+              {webPushBusy ? (
+                <ActivityIndicator color={colors.accent} size="small" />
+              ) : (
+                <Bell color={colors.accent} size={16} />
+              )}
+              <Text style={styles.webPushBannerText}>
+                Enable 18:30 Tomorrow Schedule Push →
+              </Text>
+            </Pressable>
+          ) : (
+            <View style={styles.webPushBannerMain}>
+              <Bell color={colors.ice} size={16} />
+              <Text style={styles.webPushBannerTip}>
+                iPhone: Share → Add to Home Screen to enable 18:30 notifications
+              </Text>
+            </View>
+          )}
+          <Pressable
+            onPress={() => setWebPushDismissed(true)}
+            hitSlop={8}
+            style={({ pressed }) => [styles.webPushDismissBtn, pressed && styles.pressed]}
+          >
+            <X color={colors.textSecondary} size={16} />
+          </Pressable>
+        </View>
       ) : null}
 
       {/* 2. Date Navigation Bar */}
@@ -1520,6 +1586,40 @@ const styles = StyleSheet.create({
     color: colors.background,
     fontSize: 13,
     fontWeight: '900',
+  },
+  webPushBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingLeft: 12,
+    paddingRight: 8,
+    paddingVertical: 9,
+    gap: 8,
+  },
+  webPushBannerMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  webPushBannerText: {
+    flex: 1,
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  webPushBannerTip: {
+    flex: 1,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  webPushDismissBtn: {
+    padding: 4,
   },
   dateBar: {
     flexDirection: 'row',

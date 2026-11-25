@@ -28,4 +28,14 @@ export const CONFIG = {
     name: 'TO Guides',
     expoProjectId: '32601f54-1560-4dec-b95d-5b658b010900',
   },
+  firebaseWeb: {
+    apiKey: 'AIzaSyAwcLI8bXYJXPYX_JuNWW0OhqtGCF-AJbY',
+    authDomain: 'to-guides.firebaseapp.com',
+    projectId: 'to-guides',
+    storageBucket: 'to-guides.firebasestorage.app',
+    messagingSenderId: '244643604138',
+    appId: '1:244643604138:web:28041bb5a12ae9a29f52d3',
+    vapidKey:
+      'BOQdcZiQlk3NbvsvEGFCy2TqcNeFYbJalXy2K6leEkk1tGal3b2DD5lRL-ZqvoVnWDNb1qCF_oyab6VyC_fN_e0',
+  },
 } as const;
