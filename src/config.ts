@@ -6,7 +6,7 @@ export const CONFIG = {
     tabName: 'Winter 2026-27 Nov-MAy',
   },
   weather: {
-    userAgent: 'TOGuides/1.7.0 (https://github.com; guide@tromsooutdoor.no)',
+    userAgent: 'TOGuides/1.8.0 (https://github.com; guide@tromsooutdoor.no)',
     refreshIntervalMs: 30000,
   },
   links: {
@@ -24,7 +24,7 @@ export const CONFIG = {
     defaultMountain: 'tverrfjellet',
   },
   app: {
-    version: '1.7.0',
+    version: '1.8.0',
     name: 'TO Guides',
     expoProjectId: '32601f54-1560-4dec-b95d-5b658b010900',
   },

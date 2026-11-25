@@ -8,7 +8,7 @@ module.exports = {
   expo: {
     name: "TO Guides",
     slug: "arctic-snowshoe-guide",
-    version: "1.7.0",
+    version: "1.8.0",
     orientation: "portrait",
     userInterfaceStyle: "dark",
     backgroundColor: "#0B0D10",
