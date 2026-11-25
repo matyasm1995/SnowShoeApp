@@ -303,10 +303,11 @@ export function TourOverviewScreen() {
   };
 
   const avColors = avalanche ? avalancheDangerColor(avalanche.dangerLevel) : null;
-  const showReportAtTop = Boolean(activeAssignment && tourEnded && !reportRecord);
+  const isDriverOnly = activeAssignment?.role === 'driver';
+  const showReportAtTop = Boolean(activeAssignment && !isDriverOnly && tourEnded && !reportRecord);
 
   const renderPostTripReportButton = () => {
-    if (!activeAssignment) return null;
+    if (!activeAssignment || isDriverOnly) return null;
     return (
       <Pressable
         onPress={() => setShowReportModal(true)}
@@ -391,6 +392,32 @@ export function TourOverviewScreen() {
         </Text>
 
         <View style={styles.infoRow}>
+          {isDriverOnly ? (
+            <View style={styles.infoChipShip}>
+              <Bus color={colors.ice} size={15} />
+              <Text style={styles.infoChipShipText}>
+                {activeAssignment && activeAssignment.drivers.length > 1 && activeAssignment.driverLabel
+                  ? `Driver (${activeAssignment.driverLabel})`
+                  : 'Driver Shift'}
+              </Text>
+            </View>
+          ) : null}
+
+          {isDriverOnly && activeAssignment && activeAssignment.assignedGuides.length > 0 ? (
+            <View style={styles.infoChip}>
+              <Text style={styles.infoChipText}>
+                Guide: {activeAssignment.assignedGuides.join('/')}
+              </Text>
+            </View>
+          ) : null}
+
+          {!isDriverOnly && activeAssignment?.driverLabel ? (
+            <View style={styles.infoChip}>
+              <Bus color={colors.ice} size={15} />
+              <Text style={styles.infoChipText}>Driver: {activeAssignment.driverLabel}</Text>
+            </View>
+          ) : null}
+
           {activeAssignment?.shipName ? (
             <View style={styles.infoChipShip}>
               <Ship color={colors.ice} size={15} />
@@ -890,7 +917,7 @@ export function TourOverviewScreen() {
       })}
 
       {/* 10. Post-Trip Report Button at bottom before/during tour (or when already submitted) */}
-      {!showReportAtTop ? (
+      {!showReportAtTop && !isDriverOnly ? (
         <View style={styles.bottomReportWrap}>{renderPostTripReportButton()}</View>
       ) : null}
 

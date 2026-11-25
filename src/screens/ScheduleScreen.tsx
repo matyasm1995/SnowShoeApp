@@ -279,6 +279,7 @@ export function ScheduleScreen() {
     for (let idx = 0; idx < assignments.length; idx++) {
       const tour = assignments[idx];
       if (!tour) continue;
+      if (tour.role === 'driver') continue;
       if (tour.statusColor !== 'confirmed' && tour.statusColor !== 'pending') continue;
 
       const tourKey = `${dateKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
@@ -327,12 +328,13 @@ export function ScheduleScreen() {
 
       if (dayTours.length > 0) {
         const first = dayTours[0]!;
+        const roleTag = first.role === 'driver' ? ' [Driver]' : '';
         const extra = dayTours.length > 1 ? ` +${dayTours.length - 1}` : '';
         const rcTag = status.alsoRentalCenter ? ' + RC' : '';
         list.push({
           offset: i,
           dayLabel: label,
-          statusText: `${first.startTimeLabel ?? ''} ${first.tourName.slice(0, 20)}${extra}${rcTag}`.trim(),
+          statusText: `${first.startTimeLabel ?? ''} ${first.tourName.slice(0, 18)}${roleTag}${extra}${rcTag}`.trim(),
           kind: 'tour',
         });
       } else if (status.type === 'day_off') {
@@ -347,7 +349,13 @@ export function ScheduleScreen() {
 
   const companyOps = useMemo(() => {
     if (!syncData) {
-      return { tours: [] as CompanyDayTour[], vehicles: [], rentalCenterRaw: '', guidesOnDutyRaw: '' };
+      return {
+        tours: [] as CompanyDayTour[],
+        vehicles: [],
+        rentalCenterRaw: '',
+        guidesOnDutyRaw: '',
+        minibusDriversRaw: '',
+      };
     }
     return parseCompanyDayOperations(
       syncData.values,
@@ -628,8 +636,10 @@ export function ScheduleScreen() {
             </View>
           ) : null}
 
-          {/* Rental Center & Guides on Duty */}
-          {companyOps.rentalCenterRaw || companyOps.guidesOnDutyRaw ? (
+          {/* Rental Center, Guides on Duty & Minibus Drivers */}
+          {companyOps.rentalCenterRaw ||
+          companyOps.guidesOnDutyRaw ||
+          companyOps.minibusDriversRaw ? (
             <View style={[sharedStyles.card, styles.opsSummaryCard]}>
               {companyOps.rentalCenterRaw ? (
                 <View style={styles.vehicleSummaryRow}>
@@ -641,6 +651,12 @@ export function ScheduleScreen() {
                 <View style={styles.vehicleSummaryRow}>
                   <Text style={styles.vehicleSummaryName}>Guides on Duty</Text>
                   <Text style={styles.vehicleSummaryDetail}>{companyOps.guidesOnDutyRaw}</Text>
+                </View>
+              ) : null}
+              {companyOps.minibusDriversRaw ? (
+                <View style={styles.vehicleSummaryRow}>
+                  <Text style={styles.vehicleSummaryName}>Minibus Drivers</Text>
+                  <Text style={styles.vehicleSummaryDetail}>{companyOps.minibusDriversRaw}</Text>
                 </View>
               ) : null}
             </View>
@@ -680,8 +696,18 @@ export function ScheduleScreen() {
                     </Text>
                     <View style={styles.badgesRow}>
                       {ct.isMine ? (
-                        <View style={styles.mineBadge}>
-                          <Text style={styles.mineBadgeText}>YOUR TOUR</Text>
+                        <View
+                          style={ct.myRole === 'driver' ? styles.driverBadge : styles.mineBadge}
+                        >
+                          <Text
+                            style={
+                              ct.myRole === 'driver'
+                                ? styles.driverBadgeText
+                                : styles.mineBadgeText
+                            }
+                          >
+                            {ct.myRole === 'driver' ? 'YOU DRIVE' : 'YOUR TOUR'}
+                          </Text>
                         </View>
                       ) : null}
                       {statusBadge ? (
@@ -736,11 +762,38 @@ export function ScheduleScreen() {
                           </Text>
                         </View>
                       ))
-                    ) : (
+                    ) : ct.drivers.length === 0 ? (
                       <Text style={styles.allGuidesFallback} numberOfLines={1}>
                         {ct.rawText || 'Unassigned'}
                       </Text>
+                    ) : (
+                      <Text style={styles.allGuidesFallback}>TBD</Text>
                     )}
+
+                    {ct.drivers.length > 0 ? (
+                      <>
+                        <Text style={styles.allDriversLabel}>Driver:</Text>
+                        {ct.drivers.map((d, dIdx) => {
+                          const isMeDriver =
+                            d.toLowerCase() === profile.initials.trim().toLowerCase();
+                          return (
+                            <View
+                              key={`${ct.id}-d-${dIdx}`}
+                              style={[styles.driverPill, isMeDriver && styles.driverPillMine]}
+                            >
+                              <Text
+                                style={[
+                                  styles.driverPillText,
+                                  isMeDriver && styles.driverPillTextMine,
+                                ]}
+                              >
+                                {d}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </>
+                    ) : null}
                   </View>
 
                   <View style={styles.tourFooter}>
@@ -895,8 +948,12 @@ export function ScheduleScreen() {
             tour.endMinutes !== null &&
             getOsloMinutes(new Date()) >= tour.endMinutes);
 
+        const isDriverOnly = tour.role === 'driver';
         const showReportNeeded =
-          !report && ended && (tour.statusColor === 'confirmed' || tour.statusColor === 'pending');
+          !isDriverOnly &&
+          !report &&
+          ended &&
+          (tour.statusColor === 'confirmed' || tour.statusColor === 'pending');
 
         return (
           <Pressable
@@ -912,6 +969,15 @@ export function ScheduleScreen() {
                   : ''}
               </Text>
               <View style={styles.badgesRow}>
+                {isDriverOnly ? (
+                  <View style={styles.driverBadge}>
+                    <Text style={styles.driverBadgeText}>
+                      {tour.drivers.length > 1 && tour.driverLabel
+                        ? `DRIVER · ${tour.driverLabel}`
+                        : 'DRIVER'}
+                    </Text>
+                  </View>
+                ) : null}
                 {statusBadge ? (
                   <View
                     style={[
@@ -941,6 +1007,16 @@ export function ScheduleScreen() {
 
             <Text style={styles.tourTitle}>{tour.tourName}</Text>
 
+            {isDriverOnly && tour.assignedGuides.length > 0 ? (
+              <Text style={styles.crewLine}>
+                Guide: {tour.assignedGuides.join('/')}
+              </Text>
+            ) : !isDriverOnly && tour.driverLabel ? (
+              <Text style={styles.crewLine}>
+                Driver: {tour.driverLabel}
+              </Text>
+            ) : null}
+
             <View style={styles.tourFooter}>
               <View style={styles.paxChip}>
                 <Users color={colors.accent} size={15} />
@@ -949,7 +1025,7 @@ export function ScheduleScreen() {
                 </Text>
               </View>
 
-              {report ? (
+              {!isDriverOnly && report ? (
                 <View style={styles.reportDoneChip}>
                   <CheckCircle2 color={colors.success} size={13} />
                   <Text style={styles.reportDoneText}>Report Done</Text>
@@ -1369,9 +1445,16 @@ export function ScheduleScreen() {
                     </Text>
                   </View>
 
-                  {inspectedCompanyTour.vehicle || inspectedCompanyTour.meetingPoint ? (
+                  {inspectedCompanyTour.driverLabel ||
+                  inspectedCompanyTour.vehicle ||
+                  inspectedCompanyTour.meetingPoint ? (
                     <View style={styles.companyDetailCard}>
                       <Text style={styles.companyDetailLabel}>LOGISTICS</Text>
+                      {inspectedCompanyTour.driverLabel ? (
+                        <Text style={styles.companyDetailText}>
+                          Driver: {inspectedCompanyTour.driverLabel}
+                        </Text>
+                      ) : null}
                       {inspectedCompanyTour.vehicle ? (
                         <Text style={styles.companyDetailText}>
                           Vehicle: {inspectedCompanyTour.vehicle}
@@ -1712,6 +1795,20 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   mineBadgeText: { color: colors.accentSoft, fontSize: 9, fontWeight: '900' },
+  driverBadge: {
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  driverBadgeText: { color: colors.ice, fontSize: 9, fontWeight: '900' },
+  crewLine: {
+    color: colors.ice,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   allGuidesRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1719,6 +1816,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   allGuidesLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  allDriversLabel: {
+    color: colors.ice,
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
   guidePill: {
     backgroundColor: '#0E1116',
     borderColor: colors.border,
@@ -1733,6 +1836,20 @@ const styles = StyleSheet.create({
   },
   guidePillText: { color: colors.text, fontSize: 12, fontWeight: '800' },
   guidePillTextMine: { color: colors.accentSoft },
+  driverPill: {
+    backgroundColor: '#0E1116',
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  driverPillMine: {
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+  },
+  driverPillText: { color: colors.ice, fontSize: 12, fontWeight: '800' },
+  driverPillTextMine: { color: '#FFFFFF' },
   allGuidesFallback: { color: colors.textSecondary, fontSize: 12, flex: 1 },
   companyDetailCard: {
     backgroundColor: '#0E1116',

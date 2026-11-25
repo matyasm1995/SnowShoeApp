@@ -57,14 +57,21 @@ export interface ThreadedComment {
   replies: CommentPost[];
 }
 
+export type GuideAssignmentRole = 'guide' | 'driver';
+
 export interface GuideAssignment {
   dateString: string;
   guideCode: string;
+  role: GuideAssignmentRole;
+  assignedGuides: string[];
+  drivers: string[];
+  driverLabel: string | null;
   tourName: string;
   activity: 'snowshoe' | 'ski' | 'fatbike' | 'hiking';
   tourCategory: TourCategory;
   guestCount: number;
   vehicle: string | null;
+  vehicles: string[];
   meetingPoint: string | null;
   shipName: string | null;
   startTimeLabel: string | null;
@@ -115,8 +122,12 @@ export interface CompanyDayTour {
   tourCategory: TourCategory;
   guestCount: number;
   assignedGuides: string[];
+  drivers: string[];
+  driverLabel: string | null;
   isMine: boolean;
+  myRole: GuideAssignmentRole | null;
   vehicle: string | null;
+  vehicles: string[];
   meetingPoint: string | null;
   shipName: string | null;
   startTimeLabel: string | null;
@@ -140,6 +151,7 @@ export interface CompanyDayOperations {
   vehicles: CompanyVehicleItem[];
   rentalCenterRaw: string;
   guidesOnDutyRaw: string;
+  minibusDriversRaw: string;
 }
 
 export interface GuideDayNotes {
@@ -403,6 +415,9 @@ function isTourColumn(colIndex: number, headerText: string): boolean {
     lower === 'ship' ||
     lower === 'pax' ||
     lower === 'minibus' ||
+    lower.includes('minibus driver') ||
+    lower.includes('drivers on duty') ||
+    lower.includes('driver on duty') ||
     lower.startsWith('caravelle')
   ) {
     return false;
@@ -582,15 +597,47 @@ function normalizeShipCellValue(rawVal: string): string {
   return detectShipInText(trimmed) ?? trimmed;
 }
 
-function detectVehicleInText(text: string): string | null {
-  const caravelleNum = /\bcaravelle\s*#?\s*([234])\b/i.exec(text) ?? /\bc([234])\b/i.exec(text);
-  if (caravelleNum && caravelleNum[1]) {
-    return `Caravelle #${caravelleNum[1]}`;
+export function detectVehiclesInText(text: string): string[] {
+  if (!text) return [];
+  const regex =
+    /\b(?:carav?elle\s*#?\s*([234])|c([234])|(carav?elle)|(minibus)|(taxi)|(bus))\b/gi;
+  const found: string[] = [];
+  const seen = new Set<string>();
+  let hasNumberedCaravelle = false;
+
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    let label: string | null = null;
+    if (match[1] || match[2]) {
+      const num = match[1] || match[2];
+      label = `Caravelle #${num}`;
+      hasNumberedCaravelle = true;
+    } else if (match[3]) {
+      label = 'Caravelle';
+    } else if (match[4]) {
+      label = 'Minibus';
+    } else if (match[5]) {
+      label = 'Taxi';
+    } else if (match[6]) {
+      label = 'Bus';
+    }
+
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      found.push(label);
+    }
   }
-  if (/\bcaravelle\b/i.test(text)) return 'Caravelle';
-  if (/\bminibus\b/i.test(text)) return 'Minibus';
-  if (/\btaxi\b/i.test(text)) return 'Taxi';
-  return null;
+
+  // If a specific Caravelle #2/#3/#4 is already listed, don't duplicate generic "Caravelle"
+  if (hasNumberedCaravelle && seen.has('Caravelle')) {
+    return found.filter((v) => v !== 'Caravelle');
+  }
+  return found;
+}
+
+function detectVehicleInText(text: string): string | null {
+  const vehicles = detectVehiclesInText(text);
+  return vehicles.length > 0 ? vehicles.join(' + ') : null;
 }
 
 function detectMeetingPoint(
@@ -851,6 +898,20 @@ function findGuidesOnDutyColIndex(headerRow: string[]): number {
   return GUIDES_ON_DUTY_COL_INDEX;
 }
 
+function findMinibusDriversColIndex(headerRow: string[]): number {
+  for (let c = 20; c < Math.min(STAFF_COL_START, headerRow.length); c++) {
+    const h = normalizeHeader(headerRow[c]).toLowerCase();
+    if (
+      h.includes('minibus driver') ||
+      h.includes('drivers on duty') ||
+      h.includes('driver on duty')
+    ) {
+      return c;
+    }
+  }
+  return -1;
+}
+
 export function parseGuideDayNotes(
   matrix: string[][],
   notes: string[][],
@@ -1100,6 +1161,131 @@ export function findUpcomingDaysOff(
   return upcoming;
 }
 
+const NON_GUIDE_TOKENS = new Set([
+  'c2', 'c3', 'c4', 'caravelle', 'carvelle', 'minibus', 'taxi', 'bus', 'van',
+  'drive', 'drives', 'driver', 'drivers', 'driving', 'guide', 'guides',
+  'pax', 'kai', 'prostneset', 'breivika', 'radisson', 'shop',
+  'hg', 'hurtigruten', 'havila', 'capella', 'castor', 'polaris', 'pollux',
+  'finnmarken', 'midnatsol', 'trollfjord', 'kong', 'harald', 'nordkapp', 'nordlys', 'nordnorge',
+  'richard', 'vesteralen', 'polarlys', 'mein', 'schiff', 'fred', 'olsen',
+  'ski', 'xc', 'snowshoe', 'fatbike', 'bike', 'hill', 'hike', 'coffee', 'trip', 'tour', 'charter',
+  'tverrfjellet', 'rundfjellet', 'malangen', 'charlottenlund', 'tove',
+  'open', 'closed', 'yes', 'tbd', 'new', 'extra', 'group', 'private', 'vip',
+  'one', 'two', 'three', 'four', 'five', 'six',
+  'hrs', 'min',
+]);
+
+// Common short English/Norwegian words: only ignored when all-lowercase in prose
+// (capitalized tokens like "To", "TO", "He", "HE", "No", "Am" are kept as guide initials!)
+const LOWERCASE_ONLY_STOPWORDS = new Set([
+  'to', 'he', 'in', 'no', 'at', 'on', 'or', 'as', 'is', 'by', 'an',
+  'am', 'pm', 'so', 'do', 'go', 'up', 'my', 'we', 'me', 'be', 'if',
+  'of', 'it', 'us', 'ok', 'and', 'for', 'the', 'from', 'with', 'not',
+  'but', 'per', 'via', 'hr', 'h',
+]);
+
+function extractStaffFirstNamesLower(headerRow: string[]): Set<string> {
+  const staffFirstNamesLower = new Set<string>();
+  const maxStaffCol = Math.min(STAFF_COL_END, headerRow.length - 1);
+  for (let sc = STAFF_COL_START; sc <= maxStaffCol; sc++) {
+    const h = normalizeHeader(headerRow[sc]).toLowerCase();
+    for (const part of h.split(/[^a-zæøå]+/)) {
+      if (part.length >= 3) staffFirstNamesLower.add(part);
+    }
+  }
+  return staffFirstNamesLower;
+}
+
+function extractAssignedGuidesFromCell(
+  cellText: string,
+  staffFirstNamesLower: Set<string>
+): string[] {
+  const cleaned = cellText
+    .replace(/\b\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}(?:[:.]\d{2})?\b/g, ' ')
+    .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
+    .replace(/\bcarav?elle\s*#?\s*[234]\b/gi, ' ')
+    .replace(/\bkai\s*(?:8|21)\b/gi, ' ')
+    .replace(/\b\d+\s*pax\b/gi, ' ');
+
+  const rawTokens = cleaned.split(/[^A-Za-zÆØÅæøå]+/).filter((t) => t.length > 0);
+  const allShortTokens = rawTokens.length > 0 && rawTokens.every((t) => t.length <= 3);
+  const found: string[] = [];
+  const seen = new Set<string>();
+
+  for (const token of rawTokens) {
+    const lower = token.toLowerCase();
+    if (NON_GUIDE_TOKENS.has(lower)) continue;
+
+    const isAllLower = token === lower;
+    if (LOWERCASE_ONLY_STOPWORDS.has(lower) && isAllLower && !allShortTokens) {
+      continue;
+    }
+
+    const isShortInitials = token.length >= 2 && token.length <= 3;
+    const isStaffName = staffFirstNamesLower.has(lower);
+
+    if ((isShortInitials || isStaffName) && !seen.has(lower)) {
+      seen.add(lower);
+      found.push(token);
+    }
+  }
+
+  return found;
+}
+
+export interface ParsedTourCellRoles {
+  guideText: string;
+  driverText: string;
+  guides: string[];
+  drivers: string[];
+  driverLabel: string | null;
+}
+
+const DRIVER_CLAUSE_REGEX =
+  /([A-Za-zÆØÅæøå]{2,}(?:\s*(?:\/|\+|&)\s*[A-Za-zÆØÅæøå]{2,})*)\s+\b(?:drives?|driver|driving)\b/gi;
+
+/**
+ * Splits cells like "Le, He drives", "Kt Mh drives", or "Ls He/Mh drive"
+ * into separate guide and driver groups while ignoring non-person phrases like "minibus driver".
+ */
+export function parseTourCellRoles(
+  cellText: string,
+  staffFirstNamesLower: Set<string> = new Set()
+): ParsedTourCellRoles {
+  const driverChunks: string[] = [];
+  const drivers: string[] = [];
+  const seenDrivers = new Set<string>();
+
+  const guideText = cellText.replace(DRIVER_CLAUSE_REGEX, (fullMatch, groupRaw: string) => {
+    const candidateDrivers = extractAssignedGuidesFromCell(groupRaw, staffFirstNamesLower);
+    if (candidateDrivers.length === 0) {
+      // Not a person (e.g. "minibus driver" or "no driver") — keep original text
+      return fullMatch;
+    }
+    driverChunks.push(candidateDrivers.join('/'));
+    for (const d of candidateDrivers) {
+      const lower = d.toLowerCase();
+      if (!seenDrivers.has(lower)) {
+        seenDrivers.add(lower);
+        drivers.push(d);
+      }
+    }
+    return ' ';
+  });
+
+  const driverText = driverChunks.join(' ');
+  const guides = extractAssignedGuidesFromCell(guideText, staffFirstNamesLower);
+  const driverLabel = driverChunks.length > 0 ? driverChunks.join(', ') : null;
+
+  return {
+    guideText,
+    driverText,
+    guides,
+    drivers,
+    driverLabel,
+  };
+}
+
 export function parseGuideAssignments(
   matrix: string[][],
   notes: string[][],
@@ -1119,8 +1305,8 @@ export function parseGuideAssignments(
   const fontLineRow = fontLines[targetRowIdx] || [];
 
   const assignments: GuideAssignment[] = [];
-  const cleanCode = guideCode.trim().toLowerCase();
   const sheetRowNumber = targetRowIdx + 1;
+  const staffFirstNamesLower = extractStaffFirstNamesLower(headerRow);
 
   for (let c = 2; c < row.length; c++) {
     const headerTitle = normalizeHeader(headerRow[c]);
@@ -1137,7 +1323,15 @@ export function parseGuideAssignments(
       continue;
     }
 
-    if (!cellContainsGuideInitials(cellText, guideCode)) continue;
+    const parsedRoles = parseTourCellRoles(cellText, staffFirstNamesLower);
+    const isGuideMatch = cellContainsGuideInitials(parsedRoles.guideText, guideCode);
+    const isDriverMatch =
+      parsedRoles.driverText.length > 0 &&
+      cellContainsGuideInitials(parsedRoles.driverText, guideCode);
+
+    if (!isGuideMatch && !isDriverMatch) continue;
+
+    const role: GuideAssignmentRole = isGuideMatch ? 'guide' : 'driver';
 
     const hNext1 = normalizeHeader(headerRow[c + 1]).toLowerCase();
     const hNext2 = normalizeHeader(headerRow[c + 2]).toLowerCase();
@@ -1212,7 +1406,8 @@ export function parseGuideAssignments(
       shipName = detectShipInText(allNoteAndCommentText);
     }
 
-    const vehicle = detectVehicleInText(allNoteAndCommentText);
+    const vehicles = detectVehiclesInText(allNoteAndCommentText);
+    const vehicle = vehicles.length > 0 ? vehicles.join(' + ') : null;
     const meetingPoint = detectMeetingPoint(allNoteAndCommentText, headerTitle, shipName);
 
     const { activity, tourCategory } = inferTourCategory(headerTitle, allNoteAndCommentText);
@@ -1250,11 +1445,16 @@ export function parseGuideAssignments(
     assignments.push({
       dateString: targetDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       guideCode,
+      role,
+      assignedGuides: parsedRoles.guides,
+      drivers: parsedRoles.drivers,
+      driverLabel: parsedRoles.driverLabel,
       tourName: displayTourName,
       activity,
       tourCategory,
       guestCount,
       vehicle,
+      vehicles,
       meetingPoint,
       shipName,
       startTimeLabel: parsedTime?.startLabel ?? null,
@@ -1282,64 +1482,6 @@ export function parseGuideAssignments(
   return { assignments, targetRowIdx };
 }
 
-const NON_GUIDE_TOKENS = new Set([
-  'c2', 'c3', 'c4', 'caravelle', 'minibus', 'taxi', 'bus', 'van',
-  'pax', 'kai', 'prostneset', 'breivika', 'radisson', 'shop',
-  'hg', 'hurtigruten', 'havila', 'capella', 'castor', 'polaris', 'pollux',
-  'finnmarken', 'midnatsol', 'trollfjord', 'kong', 'harald', 'nordkapp', 'nordlys', 'nordnorge',
-  'richard', 'vesteralen', 'polarlys', 'mein', 'schiff', 'fred', 'olsen',
-  'ski', 'xc', 'snowshoe', 'fatbike', 'bike', 'hill', 'hike', 'coffee', 'trip', 'tour', 'charter',
-  'tverrfjellet', 'rundfjellet', 'malangen', 'charlottenlund', 'tove',
-  'open', 'closed', 'yes', 'tbd', 'new', 'extra', 'group', 'private', 'vip',
-  'hrs', 'min',
-]);
-
-// Common short English/Norwegian words: only ignored when all-lowercase in prose
-// (capitalized tokens like "To", "TO", "He", "HE", "No", "Am" are kept as guide initials!)
-const LOWERCASE_ONLY_STOPWORDS = new Set([
-  'to', 'he', 'in', 'no', 'at', 'on', 'or', 'as', 'is', 'by', 'an',
-  'am', 'pm', 'so', 'do', 'go', 'up', 'my', 'we', 'me', 'be', 'if',
-  'of', 'it', 'us', 'ok', 'and', 'for', 'the', 'from', 'with', 'not',
-  'but', 'per', 'via', 'hr', 'h',
-]);
-
-function extractAssignedGuidesFromCell(
-  cellText: string,
-  staffFirstNamesLower: Set<string>
-): string[] {
-  const cleaned = cellText
-    .replace(/\b\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}(?:[:.]\d{2})?\b/g, ' ')
-    .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
-    .replace(/\bcaravelle\s*#?\s*[234]\b/gi, ' ')
-    .replace(/\bkai\s*(?:8|21)\b/gi, ' ')
-    .replace(/\b\d+\s*pax\b/gi, ' ');
-
-  const rawTokens = cleaned.split(/[^A-Za-zÆØÅæøå]+/).filter((t) => t.length > 0);
-  const allShortTokens = rawTokens.length > 0 && rawTokens.every((t) => t.length <= 3);
-  const found: string[] = [];
-  const seen = new Set<string>();
-
-  for (const token of rawTokens) {
-    const lower = token.toLowerCase();
-    if (NON_GUIDE_TOKENS.has(lower)) continue;
-
-    const isAllLower = token === lower;
-    if (LOWERCASE_ONLY_STOPWORDS.has(lower) && isAllLower && !allShortTokens) {
-      continue;
-    }
-
-    const isShortInitials = token.length >= 2 && token.length <= 3;
-    const isStaffName = staffFirstNamesLower.has(lower);
-
-    if ((isShortInitials || isStaffName) && !seen.has(lower)) {
-      seen.add(lower);
-      found.push(token);
-    }
-  }
-
-  return found;
-}
-
 export function parseCompanyDayOperations(
   matrix: string[][],
   notes: string[][],
@@ -1351,7 +1493,13 @@ export function parseCompanyDayOperations(
 ): CompanyDayOperations {
   const targetRowIdx = findRowIndexForDate(matrix, targetDate);
   if (targetRowIdx === -1) {
-    return { tours: [], vehicles: [], rentalCenterRaw: '', guidesOnDutyRaw: '' };
+    return {
+      tours: [],
+      vehicles: [],
+      rentalCenterRaw: '',
+      guidesOnDutyRaw: '',
+      minibusDriversRaw: '',
+    };
   }
 
   const headerRow = matrix[1] || [];
@@ -1360,22 +1508,21 @@ export function parseCompanyDayOperations(
   const bgRow = backgrounds[targetRowIdx] || [];
   const fontLineRow = fontLines[targetRowIdx] || [];
 
-  const myCodeLower = myInitials.trim().toLowerCase();
   const sheetRowNumber = targetRowIdx + 1;
-
-  const staffFirstNamesLower = new Set<string>();
-  const maxStaffCol = Math.min(STAFF_COL_END, headerRow.length - 1);
-  for (let sc = STAFF_COL_START; sc <= maxStaffCol; sc++) {
-    const h = normalizeHeader(headerRow[sc]).toLowerCase();
-    for (const part of h.split(/[^a-zæøå]+/)) {
-      if (part.length >= 3) staffFirstNamesLower.add(part);
-    }
-  }
+  const staffFirstNamesLower = extractStaffFirstNamesLower(headerRow);
 
   const rentalColIdx = findRentalCenterColIndex(headerRow);
   const guidesOnDutyColIdx = findGuidesOnDutyColIndex(headerRow);
+  const minibusDriversColIdx = findMinibusDriversColIndex(headerRow);
   const rentalCenterRaw = (row[rentalColIdx] || '').toString().trim();
   const guidesOnDutyRaw = (row[guidesOnDutyColIdx] || '').toString().trim();
+  const minibusDriversStrike =
+    minibusDriversColIdx !== -1 &&
+    (fontLineRow[minibusDriversColIdx] || '').toString().toLowerCase().includes('line-through');
+  const minibusDriversRaw =
+    minibusDriversColIdx !== -1 && !minibusDriversStrike
+      ? (row[minibusDriversColIdx] || '').toString().trim()
+      : '';
 
   const tours: CompanyDayTour[] = [];
   const vehicleMap = new Map<string, string[]>();
@@ -1507,7 +1654,8 @@ export function parseCompanyDayOperations(
       shipName = detectShipInText(allNoteAndCommentText);
     }
 
-    const vehicle = detectVehicleInText(allNoteAndCommentText);
+    const tourVehicles = detectVehiclesInText(allNoteAndCommentText);
+    const vehicle = tourVehicles.length > 0 ? tourVehicles.join(' + ') : null;
     const meetingPoint = detectMeetingPoint(allNoteAndCommentText, headerTitle, shipName);
     const { tourCategory } = inferTourCategory(headerTitle, allNoteAndCommentText);
     const isCharter = c >= 44;
@@ -1538,14 +1686,31 @@ export function parseCompanyDayOperations(
       tourCategory,
     });
 
-    const assignedGuides = extractAssignedGuidesFromCell(cellText, staffFirstNamesLower);
-    const isMine = cellContainsGuideInitials(cellText, myInitials);
+    const parsedRoles = parseTourCellRoles(cellText, staffFirstNamesLower);
+    const assignedGuides = parsedRoles.guides;
+    const isGuideMine = cellContainsGuideInitials(parsedRoles.guideText, myInitials);
+    const isDriverMine =
+      parsedRoles.driverText.length > 0 &&
+      cellContainsGuideInitials(parsedRoles.driverText, myInitials);
+    const isMine = isGuideMine || isDriverMine;
+    const myRole: GuideAssignmentRole | null = isGuideMine
+      ? 'guide'
+      : isDriverMine
+        ? 'driver'
+        : null;
 
     const startLabel = parsedTime?.startLabel ?? null;
-    if (vehicle) {
-      const guideTag = assignedGuides.length > 0 ? assignedGuides.join('/') : displayTourName.slice(0, 18);
+    if (tourVehicles.length > 0) {
+      const guideTag =
+        assignedGuides.length > 0
+          ? assignedGuides.join('/')
+          : parsedRoles.drivers.length > 0
+            ? parsedRoles.drivers.join('/')
+            : displayTourName.slice(0, 18);
       const timeTag = startLabel ? ` (${startLabel})` : '';
-      addVehicleEntry(vehicle, `${guideTag}${timeTag}`);
+      for (const vName of tourVehicles) {
+        addVehicleEntry(vName, `${guideTag}${timeTag}`);
+      }
     }
 
     tours.push({
@@ -1555,8 +1720,12 @@ export function parseCompanyDayOperations(
       tourCategory,
       guestCount,
       assignedGuides,
+      drivers: parsedRoles.drivers,
+      driverLabel: parsedRoles.driverLabel,
       isMine,
+      myRole,
       vehicle,
+      vehicles: tourVehicles,
       meetingPoint,
       shipName,
       startTimeLabel: startLabel,
@@ -1590,5 +1759,6 @@ export function parseCompanyDayOperations(
     vehicles,
     rentalCenterRaw,
     guidesOnDutyRaw,
+    minibusDriversRaw,
   };
 }

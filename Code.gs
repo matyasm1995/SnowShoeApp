@@ -659,6 +659,7 @@ function pushIsTourColumn(colIndex, headerText) {
     lower === "ship" ||
     lower === "pax" ||
     lower === "minibus" ||
+    lower.indexOf("minibus driver") !== -1 ||
     lower.indexOf("caravelle") === 0
   ) {
     return false;
@@ -831,6 +832,29 @@ function pushFindStaffCol(headerRow, subscriber) {
   return -1;
 }
 
+function pushSplitDriverClause(cellText) {
+  var driverChunks = [];
+  var nonDriverWords = {
+    minibus: true, caravelle: true, carvelle: true, taxi: true, bus: true, van: true,
+    no: true, a: true, the: true, our: true, extra: true, own: true, private: true
+  };
+  var guideText = String(cellText || "").replace(
+    /([A-Za-zÆØÅæøå]{2,}(?:\s*(?:\/|\+|&)\s*[A-Za-zÆØÅæøå]{2,})*)\s+\b(?:drives?|driver|driving)\b/gi,
+    function(fullMatch, groupRaw) {
+      var parts = String(groupRaw || "").split(/[^A-Za-zÆØÅæøå]+/).filter(function(t) {
+        return t.length >= 2 && !nonDriverWords[t.toLowerCase()];
+      });
+      if (parts.length === 0) return fullMatch;
+      driverChunks.push(parts.join("/"));
+      return " ";
+    }
+  );
+  return {
+    guideText: guideText,
+    driverText: driverChunks.join(" ")
+  };
+}
+
 function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, dayLabel, syncedClock) {
   var initials = String(subscriber.initials || "").trim();
   var tours = [];
@@ -842,10 +866,24 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
     var cellText = String(row[c] || "").trim();
     if (!cellText) continue;
 
+    var lowerCell = cellText.toLowerCase();
+    if (
+      lowerCell.indexOf("closed") !== -1 ||
+      lowerCell.indexOf("canceled") !== -1 ||
+      lowerCell.indexOf("cancelled") !== -1
+    ) {
+      continue;
+    }
+
     var fl = String((fontLineRow && fontLineRow[c]) || "").toLowerCase();
     if (fl.indexOf("line-through") !== -1) continue;
 
-    if (!pushCellContainsInitials(cellText, initials)) continue;
+    var split = pushSplitDriverClause(cellText);
+    var isGuideMatch = pushCellContainsInitials(split.guideText, initials);
+    var isDriverMatch =
+      split.driverText.length > 0 && pushCellContainsInitials(split.driverText, initials);
+    if (!isGuideMatch && !isDriverMatch) continue;
+    var isDriverOnly = !isGuideMatch && isDriverMatch;
 
     var h1 = pushNormalizeHeader(headerRow[c + 1]).toLowerCase();
     var h2 = pushNormalizeHeader(headerRow[c + 2]).toLowerCase();
@@ -885,7 +923,8 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
       tourName: displayName,
       startMinutes: parsedTime ? parsedTime.startMinutes : 9999,
       startLabel: parsedTime ? parsedTime.startLabel : "",
-      guestCount: guestCount
+      guestCount: guestCount,
+      isDriverOnly: isDriverOnly
     });
   }
 
@@ -919,8 +958,9 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
   if (tours.length > 0) {
     var summaries = tours.map(function(t) {
       var timePrefix = t.startLabel ? t.startLabel + " " : "";
+      var roleSuffix = t.isDriverOnly ? " [Driver]" : "";
       var paxSuffix = t.guestCount > 0 ? " (" + t.guestCount + " pax)" : "";
-      return timePrefix + t.tourName + paxSuffix;
+      return timePrefix + t.tourName + roleSuffix + paxSuffix;
     });
     if (inRental) summaries.push("Rental Center");
     body = summaries.join(" · ");

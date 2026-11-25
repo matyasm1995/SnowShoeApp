@@ -192,8 +192,9 @@ export async function syncTripReportNotifications(
       const tourKey = `${todayKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
       const existingId = existingByTourKey.get(tourKey);
       const isSubmitted = Boolean(submittedReports[tourKey]);
+      const isDriverOnly = tour.role === 'driver';
 
-      if (isSubmitted) {
+      if (isSubmitted || isDriverOnly) {
         if (existingId) {
           await Notifications.cancelScheduledNotificationAsync(existingId);
         }
@@ -255,7 +256,7 @@ function buildTomorrowDispatchFingerprint(params: {
     const toursSig = params.tomorrowAssignments
       .map(
         (t) =>
-          `${t.tourName}|${t.startTimeLabel ?? ''}|${t.endTimeLabel ?? ''}|${t.guestCount}|${t.vehicle ?? ''}|${t.meetingPoint ?? ''}`
+          `${t.tourName}|${t.role}|${t.startTimeLabel ?? ''}|${t.endTimeLabel ?? ''}|${t.guestCount}|${t.vehicle ?? ''}|${t.meetingPoint ?? ''}`
       )
       .join(';');
     return `tours:${toursSig}|rc:${params.tomorrowDuty.alsoRentalCenter ? '1' : '0'}`;
@@ -298,8 +299,9 @@ export async function scheduleTomorrowDispatchNotification(params: {
     if (params.tomorrowAssignments.length > 0) {
       const tourSummaries = params.tomorrowAssignments.map((t) => {
         const time = t.startTimeLabel ? `${t.startTimeLabel} ` : '';
+        const roleTag = t.role === 'driver' ? ' [Driver]' : '';
         const pax = t.guestCount > 0 ? ` (${t.guestCount} pax)` : '';
-        return `${time}${t.tourName}${pax}`;
+        return `${time}${t.tourName}${roleTag}${pax}`;
       });
       if (params.tomorrowDuty.alsoRentalCenter) {
         tourSummaries.push('Rental Center');
