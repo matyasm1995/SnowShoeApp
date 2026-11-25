@@ -60,6 +60,16 @@ module.exports = {
       ],
       "expo-notifications"
     ],
+    web: {
+      bundler: "metro",
+      output: "single",
+      favicon: "./assets/icon.png",
+      name: "TO Guides",
+      shortName: "TO Guides",
+      themeColor: "#0B0D10",
+      backgroundColor: "#0B0D10",
+      display: "standalone"
+    },
     extra: {
       eas: {
         projectId: "32601f54-1560-4dec-b95d-5b658b010900"

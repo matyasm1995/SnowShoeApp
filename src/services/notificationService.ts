@@ -30,15 +30,18 @@ interface PushRegistrationRecord {
   registeredAtIso: string;
 }
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 async function ensureNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
   try {
     const existing = await Notifications.getPermissionsAsync();
     if (existing.status === 'granted') {
@@ -88,6 +91,7 @@ export async function registerDeviceForPushDispatch(
   profile: GuideProfile,
   force = false
 ): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
   try {
     const cleanInitials = profile.initials.trim();
     const cleanName = profile.fullName.trim();
@@ -124,7 +128,7 @@ export async function registerDeviceForPushDispatch(
 
     const res = await fetch(CONFIG.sheet.scriptUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
         action: 'register_push',
         token,

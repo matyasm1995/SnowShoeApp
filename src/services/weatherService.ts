@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import { CONFIG } from '../config';
 import type { GeoPoint } from '../data/routes';
 import type { WeatherPoint } from '../data/weatherSpots';
@@ -6,7 +8,10 @@ import { loadJson, saveJson } from './persistence';
 
 export const MET_USER_AGENT = CONFIG.weather.userAgent;
 
-const FORECAST_URL = 'https://api.met.no/weatherapi/locationforecast/2.0/compact';
+const FORECAST_URL =
+  Platform.OS === 'web'
+    ? '/api/forecast'
+    : 'https://api.met.no/weatherapi/locationforecast/2.0/compact';
 const REQUEST_TIMEOUT_MS = 12000;
 const MAX_FORECAST_DAYS = 10;
 
@@ -315,11 +320,12 @@ export async function fetchForecast(point: WeatherPoint): Promise<ForecastResult
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (Platform.OS !== 'web') {
+      headers['User-Agent'] = MET_USER_AGENT;
+    }
     const response = await fetch(`${FORECAST_URL}?${params.toString()}`, {
-      headers: {
-        'User-Agent': MET_USER_AGENT,
-        Accept: 'application/json',
-      },
+      headers,
       signal: controller.signal,
     });
 

@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { Platform } from 'react-native';
 
 import {
   getRouteById,
@@ -153,10 +154,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         setTrackingActive(true);
 
         try {
-          const isBgRunning = await Location.hasStartedLocationUpdatesAsync(
-            BACKGROUND_LOCATION_TASK
-          );
-          if (mounted) setBackgroundServiceActive(isBgRunning);
+          if (Platform.OS !== 'web') {
+            const isBgRunning = await Location.hasStartedLocationUpdatesAsync(
+              BACKGROUND_LOCATION_TASK
+            );
+            if (mounted) setBackgroundServiceActive(isBgRunning);
+          }
           await attachForegroundWatcher();
         } catch {
           try {
@@ -317,7 +320,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // 2. Read quick position & auto-zero if near parking
       try {
         const initial =
-          (await Location.getLastKnownPositionAsync()) ??
+          (Platform.OS !== 'web' ? await Location.getLastKnownPositionAsync() : null) ??
           (await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.High,
           }));
@@ -348,31 +351,33 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
 
-      // 3. Start background location service safely non-blocking
-      try {
-        let bg = await Location.getBackgroundPermissionsAsync();
-        if (bg.status !== 'granted') {
-          const alreadyAsked = await AsyncStorage.getItem(ASKED_BG_LOCATION_KEY);
-          if (alreadyAsked !== 'true') {
-            await AsyncStorage.setItem(ASKED_BG_LOCATION_KEY, 'true');
-            bg = await Location.requestBackgroundPermissionsAsync();
+      // 3. Start background location service safely non-blocking (native only)
+      if (Platform.OS !== 'web') {
+        try {
+          let bg = await Location.getBackgroundPermissionsAsync();
+          if (bg.status !== 'granted') {
+            const alreadyAsked = await AsyncStorage.getItem(ASKED_BG_LOCATION_KEY);
+            if (alreadyAsked !== 'true') {
+              await AsyncStorage.setItem(ASKED_BG_LOCATION_KEY, 'true');
+              bg = await Location.requestBackgroundPermissionsAsync();
+            }
           }
+          if (bg.status === 'granted') {
+            await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
+              accuracy: Location.Accuracy.BestForNavigation,
+              timeInterval: 4000,
+              distanceInterval: 6,
+              foregroundService: {
+                notificationTitle: `Tracking ${route.shortLabel}`,
+                notificationBody: 'TO Guides is monitoring elevation and checkpoints.',
+                notificationColor: colors.accent,
+              },
+            });
+            setBackgroundServiceActive(true);
+          }
+        } catch {
+          setBackgroundServiceActive(false);
         }
-        if (bg.status === 'granted') {
-          await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-            accuracy: Location.Accuracy.BestForNavigation,
-            timeInterval: 4000,
-            distanceInterval: 6,
-            foregroundService: {
-              notificationTitle: `Tracking ${route.shortLabel}`,
-              notificationBody: 'TO Guides is monitoring elevation and checkpoints.',
-              notificationColor: colors.accent,
-            },
-          });
-          setBackgroundServiceActive(true);
-        }
-      } catch {
-        setBackgroundServiceActive(false);
       }
     },
     [attachForegroundWatcher]
@@ -380,12 +385,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   const stopTracking = useCallback(async () => {
     stopForegroundWatcher();
-    try {
-      const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-      if (started) {
-        await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-      }
-    } catch {}
+    if (Platform.OS !== 'web') {
+      try {
+        const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        if (started) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+      } catch {}
+    }
     setBackgroundServiceActive(false);
     setTrackingActive(false);
     setTrackedRouteId(null);

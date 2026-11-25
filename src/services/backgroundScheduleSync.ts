@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 import {
   calculateDutyStatus,
@@ -35,7 +36,7 @@ function getOsloMinutesOfDay(date: Date): number {
   return hour * 60 + minute;
 }
 
-if (!TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
+if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
   TaskManager.defineTask(BACKGROUND_SCHEDULE_SYNC_TASK, async () => {
     try {
       const configured = await isGuideProfileConfigured();
@@ -106,6 +107,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC_TASK)) {
 }
 
 export async function registerBackgroundScheduleSync(): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     const status = await BackgroundFetch.getStatusAsync();
     if (status !== BackgroundFetch.BackgroundFetchStatus.Available) {

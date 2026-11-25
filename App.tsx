@@ -22,7 +22,14 @@ import {
   Users,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  AppState,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FloatingTrackingBubble } from './src/components/FloatingTrackingBubble';
@@ -237,6 +244,8 @@ function AppShell() {
   } = useActiveTour();
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+
     // 1. Notification tapped when app is open or in background
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data;
@@ -398,10 +407,17 @@ function AppShell() {
 
 export default function App() {
   useEffect(() => {
-    void SystemUI.setBackgroundColorAsync(colors.background);
+    if (Platform.OS !== 'web') {
+      void SystemUI.setBackgroundColorAsync(colors.background);
+      return;
+    }
+
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      void navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
   }, []);
 
-  return (
+  const content = (
     <SafeAreaProvider>
       <ActiveTourProvider>
         <TrackingProvider>
@@ -411,9 +427,31 @@ export default function App() {
       </ActiveTourProvider>
     </SafeAreaProvider>
   );
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.webOuter}>
+        <View style={styles.webPhoneShell}>{content}</View>
+      </View>
+    );
+  }
+
+  return content;
 }
 
 const styles = StyleSheet.create({
+  webOuter: {
+    flex: 1,
+    backgroundColor: '#050608',
+    alignItems: 'center',
+  },
+  webPhoneShell: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 480,
+    backgroundColor: colors.background,
+    overflow: 'hidden',
+  },
   splashWrap: {
     flex: 1,
     backgroundColor: colors.background,

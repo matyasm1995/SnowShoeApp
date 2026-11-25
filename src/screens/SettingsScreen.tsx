@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -347,34 +348,58 @@ export function SettingsScreen() {
         <ChevronRight color={colors.textSecondary} size={20} />
       </Pressable>
 
-      {/* 6b. Check / Apply App Updates */}
-      <Pressable
-        onPress={() => void handleCheckUpdate()}
-        disabled={checkingUpdate}
-        style={({ pressed }) => [
-          sharedStyles.card,
-          styles.manualBtn,
-          updateReady && styles.updateReadyCard,
-          pressed && styles.pressed,
-        ]}
-      >
-        {checkingUpdate ? (
-          <ActivityIndicator color={colors.accent} size="small" />
-        ) : (
-          <Download color={updateReady ? colors.ice : colors.accent} size={20} />
-        )}
-        <View style={styles.contractTextCol}>
-          <Text style={[styles.previewTitle, updateReady && { color: colors.ice }]}>
-            {updateReady ? 'Update Ready — Tap to Restart' : 'Check for App Updates'}
-          </Text>
-          <Text style={styles.previewSub}>
-            {updateReady
-              ? 'New version downloaded · Applies in ~1 second'
-              : 'Pull the latest over-the-air update without waiting'}
-          </Text>
-        </View>
-        <ChevronRight color={updateReady ? colors.ice : colors.textSecondary} size={20} />
-      </Pressable>
+      {/* 6b. Check / Apply App Updates (native) or Reload Web App (web) */}
+      {Platform.OS === 'web' ? (
+        <Pressable
+          onPress={() => {
+            if (typeof window !== 'undefined') {
+              window.location.reload();
+            }
+          }}
+          style={({ pressed }) => [
+            sharedStyles.card,
+            styles.manualBtn,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Download color={colors.accent} size={20} />
+          <View style={styles.contractTextCol}>
+            <Text style={styles.previewTitle}>Reload Latest Web Version</Text>
+            <Text style={styles.previewSub}>
+              Refresh to pull the newest TO Guides web updates immediately
+            </Text>
+          </View>
+          <ChevronRight color={colors.textSecondary} size={20} />
+        </Pressable>
+      ) : (
+        <Pressable
+          onPress={() => void handleCheckUpdate()}
+          disabled={checkingUpdate}
+          style={({ pressed }) => [
+            sharedStyles.card,
+            styles.manualBtn,
+            updateReady && styles.updateReadyCard,
+            pressed && styles.pressed,
+          ]}
+        >
+          {checkingUpdate ? (
+            <ActivityIndicator color={colors.accent} size="small" />
+          ) : (
+            <Download color={updateReady ? colors.ice : colors.accent} size={20} />
+          )}
+          <View style={styles.contractTextCol}>
+            <Text style={[styles.previewTitle, updateReady && { color: colors.ice }]}>
+              {updateReady ? 'Update Ready — Tap to Restart' : 'Check for App Updates'}
+            </Text>
+            <Text style={styles.previewSub}>
+              {updateReady
+                ? 'New version downloaded · Applies in ~1 second'
+                : 'Pull the latest over-the-air update without waiting'}
+            </Text>
+          </View>
+          <ChevronRight color={updateReady ? colors.ice : colors.textSecondary} size={20} />
+        </Pressable>
+      )}
 
       {/* 7. App & Integration Info */}
       <View style={styles.infoCard}>
@@ -382,9 +407,16 @@ export function SettingsScreen() {
           {CONFIG.app.name} v{CONFIG.app.version}
         </Text>
         <Text style={styles.infoLine}>• Active Tab: {CONFIG.sheet.tabName}</Text>
-        <Text style={styles.infoLine}>• Mode: Offline-First AsyncStorage</Text>
         <Text style={styles.infoLine}>
-          • 18:30 Dispatch Push: {serverPushActive ? 'Active (Live Server)' : 'Local Fallback'}
+          • Mode: {Platform.OS === 'web' ? 'Web / PWA (Offline Cache)' : 'Offline-First AsyncStorage'}
+        </Text>
+        <Text style={styles.infoLine}>
+          • 18:30 Dispatch Push:{' '}
+          {Platform.OS === 'web'
+            ? 'Web Push (Coming in Phase 2)'
+            : serverPushActive
+              ? 'Active (Live Server)'
+              : 'Local Fallback'}
         </Text>
         <Text style={styles.infoLine}>• Weather API: MET Norway Locationforecast 2.0</Text>
         {updateInfo.shortId ? (

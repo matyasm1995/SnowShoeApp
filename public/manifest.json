@@ -1,0 +1,24 @@
+{
+  "name": "TO Guides",
+  "short_name": "TO Guides",
+  "description": "Tromsø Outdoor commercial guide schedule, weather, roster & safety companion.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0B0D10",
+  "background_color": "#0B0D10",
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

@@ -451,10 +451,12 @@ export function WeatherScreen() {
     setLocatingGps(true);
     setSpotFormError(null);
     try {
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
-        setSpotFormError('Device GPS / Location Services are turned off.');
-        return;
+      if (Platform.OS !== 'web') {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled) {
+          setSpotFormError('Device GPS / Location Services are turned off.');
+          return;
+        }
       }
 
       let perm = await Location.getForegroundPermissionsAsync();

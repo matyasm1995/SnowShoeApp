@@ -1,4 +1,5 @@
 import * as Updates from 'expo-updates';
+import { Platform } from 'react-native';
 
 type Listener = (ready: boolean) => void;
 
@@ -35,6 +36,9 @@ export function getInstalledUpdateInfo(): {
   shortId: string | null;
   createdAtLabel: string | null;
 } {
+  if (Platform.OS === 'web') {
+    return { isEnabled: false, channel: null, shortId: null, createdAtLabel: null };
+  }
   const isEnabled = !__DEV__ && Updates.isEnabled;
   const channel = Updates.channel ?? null;
   const shortId = Updates.updateId ? Updates.updateId.slice(0, 8) : null;
@@ -51,7 +55,7 @@ export function getInstalledUpdateInfo(): {
 }
 
 export async function checkAndDownloadUpdateSilently(force = false): Promise<boolean> {
-  if (__DEV__ || !Updates.isEnabled) return false;
+  if (Platform.OS === 'web' || __DEV__ || !Updates.isEnabled) return false;
   if (updateReady) return true;
   if (checking) return false;
   if (!force && Date.now() - lastCheckMs < CHECK_THROTTLE_MS) return false;
@@ -79,7 +83,7 @@ export async function checkAndDownloadUpdateSilently(force = false): Promise<boo
 export async function checkForUpdateManually(): Promise<
   'updated' | 'up_to_date' | 'unavailable' | 'error'
 > {
-  if (__DEV__ || !Updates.isEnabled) return 'unavailable';
+  if (Platform.OS === 'web' || __DEV__ || !Updates.isEnabled) return 'unavailable';
   if (updateReady) return 'updated';
 
   checking = true;
@@ -103,7 +107,7 @@ export async function checkForUpdateManually(): Promise<
 }
 
 export async function applyPendingUpdate(): Promise<void> {
-  if (__DEV__ || !Updates.isEnabled) return;
+  if (Platform.OS === 'web' || __DEV__ || !Updates.isEnabled) return;
   try {
     await Updates.reloadAsync();
   } catch {}

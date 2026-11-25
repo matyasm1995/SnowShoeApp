@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 export const BACKGROUND_LOCATION_TASK = 'arctic-guide-background-tracking';
 
@@ -44,7 +45,7 @@ function toSample(loc: Location.LocationObject): TrackingSample {
   };
 }
 
-if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
+if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     if (error || !data) return;
 

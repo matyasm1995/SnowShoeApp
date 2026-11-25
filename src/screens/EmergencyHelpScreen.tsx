@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -95,13 +96,15 @@ export function EmergencyHelpScreen() {
     setError(null);
 
     try {
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
-        if (mountedRef.current && reqId === requestIdRef.current) {
-          setError('Device GPS / Location Services are turned off. Enable Location in Android settings.');
-          setLoading(false);
+      if (Platform.OS !== 'web') {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled) {
+          if (mountedRef.current && reqId === requestIdRef.current) {
+            setError('Device GPS / Location Services are turned off. Enable Location in device settings.');
+            setLoading(false);
+          }
+          return;
         }
-        return;
       }
 
       let perm = await Location.getForegroundPermissionsAsync();
@@ -110,7 +113,7 @@ export function EmergencyHelpScreen() {
       }
       if (perm.status !== 'granted') {
         if (mountedRef.current && reqId === requestIdRef.current) {
-          setError('Location permission denied. Enable GPS in Android Settings.');
+          setError('Location permission denied. Enable GPS in browser or device settings.');
           setLoading(false);
         }
         return;
@@ -121,13 +124,15 @@ export function EmergencyHelpScreen() {
       let gotLiveFix = false;
       let hasAnyFix = false;
 
-      try {
-        const last = await Location.getLastKnownPositionAsync();
-        if (last && mountedRef.current && reqId === requestIdRef.current) {
-          hasAnyFix = true;
-          applyLocation(last);
-        }
-      } catch {}
+      if (Platform.OS !== 'web') {
+        try {
+          const last = await Location.getLastKnownPositionAsync();
+          if (last && mountedRef.current && reqId === requestIdRef.current) {
+            hasAnyFix = true;
+            applyLocation(last);
+          }
+        } catch {}
+      }
 
       try {
         watcherRef.current = await Location.watchPositionAsync(
@@ -211,13 +216,15 @@ export function EmergencyHelpScreen() {
   };
 
   const openHjelp113 = async () => {
-    try {
-      const supported = await Linking.canOpenURL(CONFIG.links.hjelp113AppUri);
-      if (supported) {
-        await Linking.openURL(CONFIG.links.hjelp113AppUri);
-        return;
-      }
-    } catch {}
+    if (Platform.OS === 'android') {
+      try {
+        const supported = await Linking.canOpenURL(CONFIG.links.hjelp113AppUri);
+        if (supported) {
+          await Linking.openURL(CONFIG.links.hjelp113AppUri);
+          return;
+        }
+      } catch {}
+    }
     await dial('113');
   };
 

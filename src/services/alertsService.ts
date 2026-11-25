@@ -1,11 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 import { CONFIG } from '../config';
 import type { WeatherPoint } from '../data/weatherSpots';
 import { osloDateKey } from '../utils/format';
 import { loadJson, saveJson } from './persistence';
 
-const METALERTS_URL = 'https://api.met.no/weatherapi/metalerts/2.0/current.json';
+const METALERTS_URL =
+  Platform.OS === 'web'
+    ? '/api/metalerts'
+    : 'https://api.met.no/weatherapi/metalerts/2.0/current.json';
 const VARSOM_TROMSO_URL =
   'https://api01.nve.no/hydrology/forecast/avalanche/v6.3.0/api/AvalancheWarningByRegion/Detail';
 const TROMSO_REGION_ID = 3011;
@@ -192,11 +196,12 @@ export async function fetchWeatherAlerts(
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (Platform.OS !== 'web') {
+      headers['User-Agent'] = CONFIG.weather.userAgent;
+    }
     const res = await fetch(`${METALERTS_URL}?${params.toString()}`, {
-      headers: {
-        'User-Agent': CONFIG.weather.userAgent,
-        Accept: 'application/json',
-      },
+      headers,
       signal: controller.signal,
     });
 
@@ -304,7 +309,10 @@ export async function fetchTromsoAvalanche(
 
   const dayKey = osloDateKey(date);
   const key = `alerts:avalanche:v1:${TROMSO_REGION_ID}:${dayKey}`;
-  const url = `${VARSOM_TROMSO_URL}/${TROMSO_REGION_ID}/2/${dayKey}/${dayKey}`;
+  const url =
+    Platform.OS === 'web'
+      ? `/api/avalanche?dayKey=${encodeURIComponent(dayKey)}`
+      : `${VARSOM_TROMSO_URL}/${TROMSO_REGION_ID}/2/${dayKey}/${dayKey}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
