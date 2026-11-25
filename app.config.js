@@ -25,7 +25,7 @@ module.exports = {
       ...(hasGoogleServices ? { googleServicesFile: "./google-services.json" } : {}),
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
-        backgroundColor: "#0B0D10"
+        backgroundColor: "#131A22"
       },
       edgeToEdgeEnabled: true,
       permissions: [
