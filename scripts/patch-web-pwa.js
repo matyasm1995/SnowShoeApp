@@ -19,7 +19,7 @@ const pwaHeadTags = [
   '<meta name="apple-mobile-web-app-title" content="TO Guides" />',
   '<link rel="manifest" href="/manifest.json" />',
   '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
-  '<style>html,body,#root{background-color:#0B0D10;height:100%;height:100dvh;overscroll-behavior:none;-webkit-tap-highlight-color:transparent;}</style>',
+  '<style>html,body,#root{background-color:#0B0D10;height:100%;height:100dvh;overscroll-behavior-y:contain;-webkit-tap-highlight-color:transparent;}</style>',
 ].join('\n    ');
 
 // Update viewport for notch/safe-area support on iPhone PWA
@@ -54,4 +54,7 @@ const headersContent = `/sw.js
 `;
 fs.writeFileSync(path.join(distDir, '_headers'), headersContent, 'utf8');
 
-console.log('Patched dist/index.html with iOS PWA meta tags, manifest, icons, and _headers.');
+// Add Cloudflare Pages _redirects SPA fallback so browser history URLs (/tour, /roster, etc.) never 404 on reload
+fs.writeFileSync(path.join(distDir, '_redirects'), '/* /index.html 200\n', 'utf8');
+
+console.log('Patched dist/index.html with iOS PWA meta tags, manifest, icons, _headers, and _redirects.');

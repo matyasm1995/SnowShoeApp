@@ -6,6 +6,7 @@ import {
   createNavigationContainerRef,
   DarkTheme,
   NavigationContainer,
+  type LinkingOptions,
   type NavigatorScreenParams,
   type Theme,
 } from '@react-navigation/native';
@@ -52,7 +53,7 @@ import { registerBackgroundScheduleSync } from './src/services/backgroundSchedul
 import { colors } from './src/theme';
 
 export type RootTabParamList = {
-  Schedule: NavigatorScreenParams<ScheduleStackParamList> | undefined;
+  Schedule: NavigatorScreenParams<ScheduleStackParamList>;
   Weather: undefined;
   Roster: undefined;
   FieldGuide: undefined;
@@ -60,7 +61,7 @@ export type RootTabParamList = {
 };
 
 export type RootStackParamList = {
-  MainTabs: NavigatorScreenParams<RootTabParamList> | undefined;
+  MainTabs: NavigatorScreenParams<RootTabParamList>;
   EmergencyHelp: undefined;
 };
 
@@ -69,6 +70,34 @@ const ScheduleStack = createNativeStackNavigator<ScheduleStackParamList>();
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 
 const navRef = createNavigationContainerRef<RootStackParamList>();
+
+const webLinking = {
+  prefixes: [],
+  config: {
+    initialRouteName: 'MainTabs',
+    screens: {
+      MainTabs: {
+        initialRouteName: 'Schedule',
+        screens: {
+          Schedule: {
+            initialRouteName: 'ScheduleHome',
+            screens: {
+              ScheduleHome: '',
+              TourOverview: 'tour',
+              DetailedWeather: 'tour-weather',
+              Tracking: 'tracking',
+            },
+          },
+          Weather: 'weather',
+          Roster: 'roster',
+          FieldGuide: 'guide',
+          Settings: 'settings',
+        },
+      },
+      EmergencyHelp: 'emergency',
+    },
+  },
+} as LinkingOptions<RootStackParamList>;
 
 const navigationTheme: Theme = {
   ...DarkTheme,
@@ -104,6 +133,7 @@ function EmergencyHeaderButton() {
 function ScheduleStackNavigator() {
   return (
     <ScheduleStack.Navigator
+      initialRouteName="ScheduleHome"
       screenOptions={{
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
@@ -144,6 +174,7 @@ function MainTabsNavigator() {
   return (
     <Tab.Navigator
       initialRouteName="Schedule"
+      backBehavior="history"
       screenOptions={{
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
@@ -330,6 +361,7 @@ function AppShell() {
         screen: 'Schedule',
         params: {
           screen: 'TourOverview',
+          initial: false,
           params: {
             openReport: true,
             reportTriggerId: Date.now(),
@@ -401,6 +433,7 @@ function AppShell() {
     <NavigationContainer
       ref={navRef}
       theme={navigationTheme}
+      linking={Platform.OS === 'web' ? webLinking : undefined}
       onReady={() => {
         setNavReady(true);
         setCurrentRouteName(navRef.getCurrentRoute()?.name);
@@ -443,7 +476,7 @@ function AppShell() {
             if (navRef.isReady()) {
               navRef.navigate('MainTabs', {
                 screen: 'Schedule',
-                params: { screen: 'Tracking' },
+                params: { screen: 'Tracking', initial: false },
               });
             }
           }}
