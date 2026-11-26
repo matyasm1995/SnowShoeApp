@@ -21,7 +21,7 @@ module.exports = {
     },
     android: {
       package: "com.toguides.app",
-      versionCode: 11,
+      versionCode: 12,
       ...(hasGoogleServices ? { googleServicesFile: "./google-services.json" } : {}),
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
