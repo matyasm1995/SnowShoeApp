@@ -4,11 +4,13 @@
   },
   "build": {
     "development": {
+      "pnpm": "12.21.0",
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development"
     },
     "preview": {
+      "pnpm": "12.21.0",
       "distribution": "internal",
       "channel": "preview",
       "android": {
@@ -16,6 +18,7 @@
       }
     },
     "production": {
+      "pnpm": "12.21.0",
       "channel": "production"
     }
   },
