@@ -21,7 +21,7 @@ module.exports = {
     },
     android: {
       package: "com.toguides.app",
-      versionCode: 12,
+      versionCode: 13,
       ...(hasGoogleServices ? { googleServicesFile: "./google-services.json" } : {}),
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
@@ -38,6 +38,7 @@ module.exports = {
       ]
     },
     plugins: [
+      "./plugins/withDisablePredictiveBack",
       [
         "expo-build-properties",
         {
