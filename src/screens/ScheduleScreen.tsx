@@ -67,10 +67,12 @@ import {
   type WeatherAlertItem,
 } from '../services/alertsService';
 import {
+  buildStaffInitialsMap,
   calculateDutyStatus,
   parseCompanyDayOperations,
   parseGuideAssignments,
   parseGuideDayNotes,
+  resolveStaffInitialsList,
   type CompanyDayTour,
   type GuideAssignment,
   type TourColorStatus,
@@ -368,6 +370,21 @@ export function ScheduleScreen() {
     );
   }, [syncData, profile.initials, selectedDate]);
 
+  const [showStaffFullNames, setShowStaffFullNames] = useState(false);
+
+  const staffInitialsMap = useMemo(() => {
+    if (!syncData) return {};
+    return buildStaffInitialsMap(syncData.values);
+  }, [syncData]);
+
+  const formatInitialWithName = useCallback(
+    (code: string) => {
+      const full = staffInitialsMap[code.trim().toLowerCase()];
+      return full ? `${full} (${code})` : code;
+    },
+    [staffInitialsMap]
+  );
+
   const guideDayNotes = useMemo(() => {
     if (!syncData) return null;
     return parseGuideDayNotes(
@@ -636,30 +653,73 @@ export function ScheduleScreen() {
             </View>
           ) : null}
 
-          {/* Rental Center, Guides on Duty & Minibus Drivers */}
+          {/* Rental Center, Guides on Duty & Minibus Drivers (tap to expand full names) */}
           {companyOps.rentalCenterRaw ||
           companyOps.guidesOnDutyRaw ||
           companyOps.minibusDriversRaw ? (
-            <View style={[sharedStyles.card, styles.opsSummaryCard]}>
-              {companyOps.rentalCenterRaw ? (
-                <View style={styles.vehicleSummaryRow}>
-                  <Text style={styles.vehicleSummaryName}>Rental Center</Text>
-                  <Text style={styles.vehicleSummaryDetail}>{companyOps.rentalCenterRaw}</Text>
+            <Pressable
+              onPress={() => setShowStaffFullNames((v) => !v)}
+              style={({ pressed }) => [
+                sharedStyles.card,
+                styles.opsSummaryCard,
+                showStaffFullNames && styles.opsSummaryCardExpanded,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.staffCardHeader}>
+                <View style={styles.opsHeaderRow}>
+                  <Users color={colors.ice} size={15} />
+                  <Text style={styles.staffCardHeaderTitle}>STAFF ON DUTY</Text>
                 </View>
-              ) : null}
-              {companyOps.guidesOnDutyRaw ? (
-                <View style={styles.vehicleSummaryRow}>
-                  <Text style={styles.vehicleSummaryName}>Guides on Duty</Text>
-                  <Text style={styles.vehicleSummaryDetail}>{companyOps.guidesOnDutyRaw}</Text>
+                <View style={styles.staffExpandHintRow}>
+                  <Text style={styles.staffExpandHintText}>
+                    {showStaffFullNames ? 'Initials only' : 'Full names'}
+                  </Text>
+                  {showStaffFullNames ? (
+                    <ChevronUp color={colors.ice} size={15} />
+                  ) : (
+                    <ChevronDown color={colors.ice} size={15} />
+                  )}
                 </View>
-              ) : null}
-              {companyOps.minibusDriversRaw ? (
-                <View style={styles.vehicleSummaryRow}>
-                  <Text style={styles.vehicleSummaryName}>Minibus Drivers</Text>
-                  <Text style={styles.vehicleSummaryDetail}>{companyOps.minibusDriversRaw}</Text>
-                </View>
-              ) : null}
-            </View>
+              </View>
+
+              {(
+                [
+                  { label: 'Rental Center', raw: companyOps.rentalCenterRaw },
+                  { label: 'Guides on Duty', raw: companyOps.guidesOnDutyRaw },
+                  { label: 'Minibus Drivers', raw: companyOps.minibusDriversRaw },
+                ] as const
+              )
+                .filter((row) => Boolean(row.raw))
+                .map((row) => {
+                  if (!showStaffFullNames) {
+                    return (
+                      <View key={row.label} style={styles.vehicleSummaryRow}>
+                        <Text style={styles.vehicleSummaryName}>{row.label}</Text>
+                        <Text style={styles.vehicleSummaryDetail}>{row.raw}</Text>
+                      </View>
+                    );
+                  }
+                  const entries = resolveStaffInitialsList(row.raw, staffInitialsMap);
+                  return (
+                    <View key={row.label} style={styles.staffExpandedSection}>
+                      <Text style={styles.vehicleSummaryName}>{row.label}</Text>
+                      <View style={styles.staffChipsWrap}>
+                        {entries.map((entry, idx) => (
+                          <View key={`${row.label}-${idx}`} style={styles.staffNameChip}>
+                            <Text style={styles.staffNameChipText}>
+                              {entry.fullName
+                                ? `${entry.fullName} (${entry.initials})`
+                                : entry.initials}
+                              {entry.note ? ` · ${entry.note}` : ''}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                })}
+            </Pressable>
           ) : null}
 
           <Text style={sharedStyles.sectionTitle}>
@@ -1450,14 +1510,26 @@ export function ScheduleScreen() {
                     </Text>
                   </View>
 
-                  {inspectedCompanyTour.driverLabel ||
+                  {inspectedCompanyTour.assignedGuides.length > 0 ||
+                  inspectedCompanyTour.drivers.length > 0 ||
                   inspectedCompanyTour.vehicle ||
                   inspectedCompanyTour.meetingPoint ? (
                     <View style={styles.companyDetailCard}>
-                      <Text style={styles.companyDetailLabel}>LOGISTICS</Text>
-                      {inspectedCompanyTour.driverLabel ? (
+                      <Text style={styles.companyDetailLabel}>CREW & LOGISTICS</Text>
+                      {inspectedCompanyTour.assignedGuides.length > 0 ? (
                         <Text style={styles.companyDetailText}>
-                          Driver: {inspectedCompanyTour.driverLabel}
+                          Guide:{' '}
+                          {inspectedCompanyTour.assignedGuides
+                            .map((g) => formatInitialWithName(g))
+                            .join(', ')}
+                        </Text>
+                      ) : null}
+                      {inspectedCompanyTour.drivers.length > 0 ? (
+                        <Text style={styles.companyDetailText}>
+                          Driver:{' '}
+                          {inspectedCompanyTour.drivers
+                            .map((d) => formatInitialWithName(d))
+                            .join(' / ')}
                         </Text>
                       ) : null}
                       {inspectedCompanyTour.vehicle ? (
@@ -1765,6 +1837,55 @@ const styles = StyleSheet.create({
   },
   allTripsWrap: { gap: 10 },
   opsSummaryCard: { gap: 6, padding: 12 },
+  opsSummaryCardExpanded: {
+    borderColor: colors.ice,
+  },
+  staffCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  staffCardHeaderTitle: {
+    color: colors.ice,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  staffExpandHintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  staffExpandHintText: {
+    color: colors.ice,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  staffExpandedSection: {
+    gap: 5,
+    paddingTop: 6,
+    borderTopColor: colors.borderSubtle,
+    borderTopWidth: 1,
+  },
+  staffChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  staffNameChip: {
+    backgroundColor: colors.iceDarkBg,
+    borderColor: colors.ice,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  staffNameChipText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   opsHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   opsHeaderTitle: {
     color: colors.accentSoft,

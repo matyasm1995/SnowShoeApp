@@ -11,7 +11,7 @@ export const CONFIG = {
   },
   links: {
     kattfjordeidetCameras: 'https://www.vegvesen.no/trafikk/webkamera',
-    iticketPortal: 'https://portal.iticket.com/en/index.html?573',
+    iticketPortal: 'https://portal.iticket.com/en/573~manifests-new(192)',
     accidentReportForm:
       'https://docs.google.com/forms/d/e/1FAIpQLScAKL9majYzvd6hO7ibOroVSO69fG-oP1VYgztVkoMFvM4u2Q/viewform',
     emergencyTel: 'tel:113',

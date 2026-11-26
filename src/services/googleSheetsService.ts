@@ -1762,3 +1762,174 @@ export function parseCompanyDayOperations(
     minibusDriversRaw,
   };
 }
+
+const STAFF_COL_IGNORED_TOKENS = new Set([
+  'rc', 'off', 'of', 'ok', 'no', 'yes', 'wfa', 'e', 'd', 'cl', 'up', 'wr', 'mm',
+  'hr', 'am', 'pm', 'sato', 'tbd', 'day', 'min', 'hrs', 'new', 'old', 'all',
+]);
+
+function cleanStaffDisplayName(rawHeader: string): string {
+  return rawHeader
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b\d+\s*%/g, ' ')
+    .replace(/\b(?:rc|guiding|driver|drivers|guide|guides)\b/gi, ' ')
+    .replace(/[,/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Automatically maps 2–3 letter initials (lowercase key) -> staff display name
+ * directly from the live Google Sheet staff columns (cols 68..105):
+ *   1) Explicit parenthesized initials in the header: e.g. "Lili-Ann 60% (la)" -> la: "Lili-Ann"
+ *   2) Most frequent 2-letter self-marked initials in that staff member's column: e.g. "mh" -> "Michal"
+ *   3) First-2-letter fallback for remaining staff columns (combining collisions cleanly)
+ */
+export function buildStaffInitialsMap(matrix: string[][]): Record<string, string> {
+  const headerRow = matrix[1] || [];
+  const maxCol = Math.min(STAFF_COL_END, headerRow.length - 1);
+  const map: Record<string, string> = {};
+  const fallbackCandidates = new Map<string, string[]>();
+
+  for (let c = STAFF_COL_START; c <= maxCol; c++) {
+    const rawHeader = normalizeHeader(headerRow[c]);
+    if (!rawHeader) continue;
+
+    const displayName = cleanStaffDisplayName(rawHeader);
+    if (!displayName) continue;
+
+    let assignedCode: string | null = null;
+
+    // 1) Explicit parenthesized 2-3 letter initials in header: (la), (iv), (sa), (mo), (ak), (id)
+    const parenRegex = /\(([A-Za-zÆØÅæøå]{2,3})\)/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = parenRegex.exec(rawHeader)) !== null) {
+      const code = (pm[1] || '').toLowerCase();
+      if (code && !STAFF_COL_IGNORED_TOKENS.has(code)) {
+        assignedCode = code;
+        break;
+      }
+    }
+
+    // 2) Most frequent 2-letter self-marked initials inside that staff member's column
+    if (!assignedCode) {
+      const counts = new Map<string, number>();
+      for (let r = 2; r < matrix.length; r++) {
+        const val = (matrix[r]?.[c] || '').toString().trim();
+        if (!/^[A-Za-zÆØÅæøå]{2}$/.test(val)) continue;
+        const lower = val.toLowerCase();
+        if (STAFF_COL_IGNORED_TOKENS.has(lower)) continue;
+        counts.set(lower, (counts.get(lower) ?? 0) + 1);
+      }
+      let bestCode: string | null = null;
+      let bestCount = 0;
+      for (const [code, count] of counts.entries()) {
+        if (count > bestCount) {
+          bestCode = code;
+          bestCount = count;
+        }
+      }
+      if (bestCode) {
+        assignedCode = bestCode;
+      }
+    }
+
+    if (assignedCode) {
+      if (!map[assignedCode]) {
+        map[assignedCode] = displayName;
+      }
+    } else {
+      // 3) Queue first-2-letter fallback (e.g. Vi -> vi, Edvinas -> ed, Marta/Magne -> ma)
+      const firstWord = displayName.split(/[\s-]+/)[0] || '';
+      if (firstWord.length >= 2) {
+        const key = firstWord.slice(0, 2).toLowerCase();
+        const list = fallbackCandidates.get(key) ?? [];
+        if (!list.includes(displayName)) {
+          list.push(displayName);
+          fallbackCandidates.set(key, list);
+        }
+      }
+    }
+  }
+
+  for (const [key, names] of fallbackCandidates.entries()) {
+    if (!map[key] && names.length > 0) {
+      map[key] = names.join(' / ');
+    }
+  }
+
+  return map;
+}
+
+export interface ResolvedStaffToken {
+  initials: string;
+  fullName: string | null;
+  note: string | null;
+}
+
+/**
+ * Splits a raw RC / Guides on Duty / Minibus Drivers cell like:
+ *   "ci, jo, el (cl)" or "jo, si(09.40 rc- chasing lights)" or "he, mh, to, le, lk, kt"
+ * into structured { initials, fullName, note } entries using the live staff map.
+ */
+export function resolveStaffInitialsList(
+  rawText: string,
+  staffMap: Record<string, string>
+): ResolvedStaffToken[] {
+  const clean = rawText.trim();
+  if (!clean) return [];
+
+  // Split by commas/newlines outside parentheses
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i]!;
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+
+    if ((ch === ',' || ch === '\n') && depth === 0) {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+
+  const results: ResolvedStaffToken[] = [];
+  for (const part of parts) {
+    const noteMatch = /\(([^)]+)\)/.exec(part);
+    const note = noteMatch?.[1]?.trim() || null;
+    const withoutNote = part.replace(/\([^)]*\)/g, ' ').replace(/\?/g, '').trim();
+
+    // If the chunk has multiple space/slash-separated initials (e.g. "he mh" or "he/mh"), expand each
+    const tokens = withoutNote.split(/[\s/]+/).filter((t) => t.length > 0);
+    if (tokens.length === 0) continue;
+
+    let matchedAny = false;
+    for (let idx = 0; idx < tokens.length; idx++) {
+      const tok = tokens[idx]!;
+      const lower = tok.toLowerCase();
+      const fullName = staffMap[lower] ?? null;
+      if (fullName) {
+        matchedAny = true;
+        results.push({
+          initials: tok,
+          fullName,
+          note: idx === tokens.length - 1 ? note : null,
+        });
+      }
+    }
+
+    if (!matchedAny) {
+      results.push({
+        initials: withoutNote,
+        fullName: null,
+        note,
+      });
+    }
+  }
+
+  return results;
+}
