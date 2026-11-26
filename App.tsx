@@ -240,6 +240,7 @@ function AppShell() {
     selectManualRoute,
     selectDate,
     selectAssignment,
+    selectDateAndAssignment,
     syncNow,
   } = useActiveTour();
 
@@ -308,20 +309,32 @@ function AppShell() {
     setPendingNotifData(null);
 
     if (data.tourKey || data.openReport === true || data.type === 'trip_report') {
-      if (typeof data.dateIso === 'string') {
-        const parsedDate = parseIsoDateLocalNoon(data.dateIso);
+      const parsedDate =
+        typeof data.dateIso === 'string' ? parseIsoDateLocalNoon(data.dateIso) : null;
+      const targetTourIdx =
+        typeof data.tourIdx === 'number' && Number.isFinite(data.tourIdx) && data.tourIdx >= 0
+          ? data.tourIdx
+          : undefined;
+
+      if (parsedDate && targetTourIdx !== undefined) {
+        selectDateAndAssignment(parsedDate, targetTourIdx);
+      } else {
         if (parsedDate) {
           selectDate(parsedDate);
         }
-      }
-      if (typeof data.tourIdx === 'number' && Number.isFinite(data.tourIdx) && data.tourIdx >= 0) {
-        selectAssignment(data.tourIdx);
+        if (targetTourIdx !== undefined) {
+          selectAssignment(targetTourIdx);
+        }
       }
       navRef.navigate('MainTabs', {
         screen: 'Schedule',
         params: {
           screen: 'TourOverview',
-          params: { openReport: true, reportTriggerId: Date.now() },
+          params: {
+            openReport: true,
+            reportTriggerId: Date.now(),
+            targetTourIdx,
+          },
         },
       });
       return;
@@ -352,6 +365,7 @@ function AppShell() {
     navReady,
     selectDate,
     selectAssignment,
+    selectDateAndAssignment,
     syncNow,
   ]);
 

@@ -119,6 +119,7 @@ export interface ActiveTourContextValue {
   isManualTripView: boolean;
   tourKey: string;
   selectAssignment: (idx: number) => void;
+  selectDateAndAssignment: (date: Date, idx: number) => void;
   selectManualRoute: (routeId: string | null) => void;
   setHillHikeMountain: (mountainId: 'tverrfjellet' | 'rundfjellet') => void;
   shiftDate: (days: number) => void;
@@ -159,6 +160,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
   >({});
 
   const autoSyncingRef = useRef(false);
+  const pinnedAssignmentRef = useRef<{ dateKey: string; idx: number } | null>(null);
 
   const refreshReports = useCallback(async () => {
     const reports = await loadSubmittedReports();
@@ -329,13 +331,21 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     return 0;
   }, [parsed.assignments, selectedDate]);
 
+  const selDateKey = useMemo(() => osloDateKey(selectedDate), [selectedDate]);
+
   useEffect(() => {
     if (parsed.assignments.length === 0) {
       setSelectedAssignmentIdx(0);
       return;
     }
+    const pinned = pinnedAssignmentRef.current;
+    if (pinned && pinned.dateKey === selDateKey) {
+      const clamped = Math.max(0, Math.min(pinned.idx, parsed.assignments.length - 1));
+      setSelectedAssignmentIdx(clamped);
+      return;
+    }
     setSelectedAssignmentIdx(closestAssignmentIdx >= 0 ? closestAssignmentIdx : 0);
-  }, [parsed.assignments.length, closestAssignmentIdx]);
+  }, [parsed.assignments.length, closestAssignmentIdx, selDateKey]);
 
   const dutyStatus: DutyStatus = useMemo(() => {
     if (!syncData) {
@@ -419,8 +429,21 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     return `free_${dayKey}`;
   }, [isManualTripView, manualRouteId, dayKey, activeAssignment, selectedAssignmentIdx]);
 
-  const selectAssignment = useCallback((idx: number) => {
+  const selectAssignment = useCallback(
+    (idx: number) => {
+      pinnedAssignmentRef.current = { dateKey: dayKey, idx };
+      setManualRouteId(null);
+      setSelectedAssignmentIdx(idx);
+    },
+    [dayKey]
+  );
+
+  const selectDateAndAssignment = useCallback((date: Date, idx: number) => {
+    const normalized = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0);
+    const targetKey = osloDateKey(normalized);
+    pinnedAssignmentRef.current = { dateKey: targetKey, idx };
     setManualRouteId(null);
+    setSelectedDate((prev) => (osloDateKey(prev) === targetKey ? prev : normalized));
     setSelectedAssignmentIdx(idx);
   }, []);
 
@@ -437,6 +460,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
   );
 
   const shiftDate = useCallback((days: number) => {
+    pinnedAssignmentRef.current = null;
     setManualRouteId(null);
     setSelectedDate((prev) => {
       const next = new Date(prev);
@@ -446,11 +470,13 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectDate = useCallback((date: Date) => {
+    pinnedAssignmentRef.current = null;
     setManualRouteId(null);
     setSelectedDate(new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0));
   }, []);
 
   const resetToToday = useCallback(() => {
+    pinnedAssignmentRef.current = null;
     setManualRouteId(null);
     setSelectedDate(new Date());
   }, []);
@@ -482,6 +508,7 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
     isManualTripView,
     tourKey,
     selectAssignment,
+    selectDateAndAssignment,
     selectManualRoute,
     setHillHikeMountain,
     shiftDate,

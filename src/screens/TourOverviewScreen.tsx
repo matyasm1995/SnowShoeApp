@@ -70,7 +70,9 @@ import { formatClock, formatTemperature, osloDateKey } from '../utils/format';
 
 export type ScheduleStackParamList = {
   ScheduleHome: undefined;
-  TourOverview: { openReport?: boolean; reportTriggerId?: number } | undefined;
+  TourOverview:
+    | { openReport?: boolean; reportTriggerId?: number; targetTourIdx?: number }
+    | undefined;
   DetailedWeather: { spotId?: string } | undefined;
   Tracking: undefined;
 };
@@ -97,6 +99,7 @@ export function TourOverviewScreen() {
     profile,
     activeAssignment,
     activeRoute,
+    selectedAssignmentIdx,
     isManualTripView,
     selectedDate,
     tourKey,
@@ -128,15 +131,23 @@ export function TourOverviewScreen() {
 
   useEffect(() => {
     const triggerId = route.params?.reportTriggerId ?? null;
+    const targetTourIdx = route.params?.targetTourIdx;
     if (
       route.params?.openReport &&
       activeAssignment &&
-      triggerId !== lastReportTriggerRef.current
+      triggerId !== lastReportTriggerRef.current &&
+      (targetTourIdx === undefined || selectedAssignmentIdx === targetTourIdx)
     ) {
       lastReportTriggerRef.current = triggerId;
       setShowReportModal(true);
     }
-  }, [route.params?.openReport, route.params?.reportTriggerId, activeAssignment]);
+  }, [
+    route.params?.openReport,
+    route.params?.reportTriggerId,
+    route.params?.targetTourIdx,
+    activeAssignment,
+    selectedAssignmentIdx,
+  ]);
 
   const [editingKit, setEditingKit] = useState(false);
   const [newItemText, setNewItemText] = useState('');
