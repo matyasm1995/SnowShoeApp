@@ -53,6 +53,14 @@ function extractMedicalNotes(text: string): { notes: string[]; cleanText: string
   return { notes: found, cleanText: cleanText.trim() };
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeDecimal(raw: string): string {
+  return raw.replace(',', '.');
+}
+
 function extractExplicitMetrics(text: string): {
   heights: string[];
   weights: string[];
@@ -76,35 +84,38 @@ function extractExplicitMetrics(text: string): {
     }
   }
 
-  // 2. Explicit cm / h: height (e.g. 169cm, 184 cm, h: 180)
-  const cmRegex = /(?:h|height)[:\s]*(1[2-9]\d|2[0-2]\d)\s*(?:cm)?\b|\b(1[2-9]\d|2[0-2]\d)\s*cm\b/gi;
+  // 2. Explicit cm / h: height (e.g. 169cm, 161,5 cm, h: 180)
+  const cmRegex =
+    /(?:h|height)[:\s]*((?:1[2-9]\d|2[0-2]\d)(?:[.,]\d+)?)\s*(?:cm)?\b|\b((?:1[2-9]\d|2[0-2]\d)(?:[.,]\d+)?)\s*cm\b/gi;
   for (const m of clean.matchAll(cmRegex)) {
     const val = m[1] ?? m[2];
     if (val) {
-      heights.push(`${val} cm`);
+      heights.push(`${normalizeDecimal(val)} cm`);
       clean = clean.replace(m[0], ' ');
     }
   }
 
-  // 3. Explicit kg / lbs / w: weight (e.g. 58kg, 75 kg, 165 lbs, w: 82)
-  const kgRegex = /(?:w|weight)[:\s]*(\d{2,3})\s*(?:kg|kilos?|lbs?)?\b|\b(\d{2,3})\s*(?:kg|kilos?|lbs?)\b/gi;
+  // 3. Explicit kg / lbs / w: weight (e.g. 58,9kg, 75 kg, 165 lbs, w: 82.5)
+  const kgRegex =
+    /(?:w|weight)[:\s]*(\d{2,3}(?:[.,]\d+)?)\s*(?:kg|kilos?|lbs?)?\b|\b(\d{2,3}(?:[.,]\d+)?)\s*(?:kg|kilos?|lbs?)\b/gi;
   for (const m of clean.matchAll(kgRegex)) {
     const val = m[1] ?? m[2];
     if (val) {
-      const num = parseInt(val, 10);
+      const num = parseFloat(normalizeDecimal(val));
       const isLbs = /lbs?/i.test(m[0]);
-      const finalKg = isLbs ? Math.round(num * 0.453) : num;
+      const finalKg = isLbs ? String(Math.round(num * 0.453)) : normalizeDecimal(val);
       weights.push(`${finalKg} kg`);
       clean = clean.replace(m[0], ' ');
     }
   }
 
-  // 4. Explicit shoe / size / EU (including ranges like "shoe size 40" or "EU 37-38")
+  // 4. Explicit shoe / size / EU (including decimals like "42.5" and ranges like "EU 37-38")
   const shoeExplicitRegex =
-    /(?:shoe\s*size|shoe|size|str\.?|boot|eu)[:\s]*(2[5-9]|3[0-9]|4[0-9]|5[0-2])(?:\s*[-/]\s*(2[5-9]|3[0-9]|4[0-9]|5[0-2]))?\b/gi;
+    /(?:shoe\s*size|shoe|size|str\.?|boot|eu)[:\s]*((?:2[5-9]|3[0-9]|4[0-9]|5[0-2])(?:[.,]5)?)(?:\s*[-/]\s*((?:2[5-9]|3[0-9]|4[0-9]|5[0-2])(?:[.,]5)?))?\b/gi;
   for (const m of clean.matchAll(shoeExplicitRegex)) {
     if (m[1]) {
-      const val = m[2] ? `${m[1]}-${m[2]}` : m[1];
+      const first = normalizeDecimal(m[1]);
+      const val = m[2] ? `${first}-${normalizeDecimal(m[2])}` : first;
       shoes.push(val);
       clean = clean.replace(m[0], ' ');
     }
@@ -136,23 +147,24 @@ function extractBareMetrics(
     }
   }
 
-  // 2. Bare height numbers (125 to 225, e.g. 165, 173, 190)
-  const bareHeightRegex = /\b(1[2-9]\d|2[0-2]\d)\b/g;
+  // 2. Bare height numbers (120 to 229, including decimals like 161,5 or 174.5)
+  const bareHeightRegex = /\b((?:1[2-9]\d|2[0-2]\d)(?:[.,]\d+)?)\b/g;
   for (const m of clean.matchAll(bareHeightRegex)) {
     if (m[1]) {
-      heights.push(`${m[1]} cm`);
+      heights.push(`${normalizeDecimal(m[1])} cm`);
       clean = clean.replace(m[0], ' ');
     }
   }
 
-  // 3. Remaining 2-3 digit bare numbers
-  const bareNums: { raw: string; val: number }[] = [];
-  const bareNumRegex = /\b(\d{2,3})\b/g;
+  // 3. Remaining 2-3 digit bare numbers (including decimals like 45,8 / 58,9 / 76.2)
+  const bareNums: { raw: string; display: string; val: number }[] = [];
+  const bareNumRegex = /\b(\d{2,3}(?:[.,]\d+)?)\b/g;
   for (const m of clean.matchAll(bareNumRegex)) {
     if (m[1]) {
-      const val = parseInt(m[1], 10);
+      const display = normalizeDecimal(m[1]);
+      const val = parseFloat(display);
       if (val >= 20 && val <= 160) {
-        bareNums.push({ raw: m[0], val });
+        bareNums.push({ raw: m[0], display, val });
       }
     }
   }
@@ -164,8 +176,8 @@ function extractBareMetrics(
     for (let i = remaining.length - 1; i >= 0; i--) {
       const item = remaining[i]!;
       if (item.val > 52 && weights.length === 0) {
-        weights.push(`${item.val} kg`);
-        clean = clean.replace(new RegExp(`\\b${item.raw}\\b`), ' ');
+        weights.push(`${item.display} kg`);
+        clean = clean.replace(new RegExp(`\\b${escapeRegex(item.raw)}\\b`), ' ');
         remaining.splice(i, 1);
       }
     }
@@ -175,8 +187,8 @@ function extractBareMetrics(
       remaining.sort((a, b) => a.val - b.val);
       const candidate = remaining[0];
       if (candidate && candidate.val >= 25 && candidate.val <= 52) {
-        shoes.push(String(candidate.val));
-        clean = clean.replace(new RegExp(`\\b${candidate.raw}\\b`), ' ');
+        shoes.push(candidate.display);
+        clean = clean.replace(new RegExp(`\\b${escapeRegex(candidate.raw)}\\b`), ' ');
         remaining.shift();
       }
     }
@@ -185,8 +197,8 @@ function extractBareMetrics(
     if (weights.length === 0 && remaining.length > 0) {
       const wCand = remaining[0];
       if (wCand && wCand.val >= 30 && wCand.val <= 150) {
-        weights.push(`${wCand.val} kg`);
-        clean = clean.replace(new RegExp(`\\b${wCand.raw}\\b`), ' ');
+        weights.push(`${wCand.display} kg`);
+        clean = clean.replace(new RegExp(`\\b${escapeRegex(wCand.raw)}\\b`), ' ');
       }
     }
   }
