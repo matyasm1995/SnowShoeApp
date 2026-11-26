@@ -5,12 +5,18 @@
   "build": {
     "development": {
       "pnpm": "12.21.0",
+      "env": {
+        "pnpm_config_dangerously_allow_all_builds": "true"
+      },
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development"
     },
     "preview": {
       "pnpm": "12.21.0",
+      "env": {
+        "pnpm_config_dangerously_allow_all_builds": "true"
+      },
       "distribution": "internal",
       "channel": "preview",
       "android": {
@@ -19,6 +25,9 @@
     },
     "production": {
       "pnpm": "12.21.0",
+      "env": {
+        "pnpm_config_dangerously_allow_all_builds": "true"
+      },
       "channel": "production"
     }
   },
