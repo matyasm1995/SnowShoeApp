@@ -6,7 +6,8 @@
     "development": {
       "pnpm": "12.21.0",
       "env": {
-        "pnpm_config_dangerously_allow_all_builds": "true"
+        "pnpm_config_dangerously_allow_all_builds": "true",
+        "pnpm_config_node_linker": "hoisted"
       },
       "developmentClient": true,
       "distribution": "internal",
@@ -15,7 +16,8 @@
     "preview": {
       "pnpm": "12.21.0",
       "env": {
-        "pnpm_config_dangerously_allow_all_builds": "true"
+        "pnpm_config_dangerously_allow_all_builds": "true",
+        "pnpm_config_node_linker": "hoisted"
       },
       "distribution": "internal",
       "channel": "preview",
@@ -26,7 +28,8 @@
     "production": {
       "pnpm": "12.21.0",
       "env": {
-        "pnpm_config_dangerously_allow_all_builds": "true"
+        "pnpm_config_dangerously_allow_all_builds": "true",
+        "pnpm_config_node_linker": "hoisted"
       },
       "channel": "production"
     }
