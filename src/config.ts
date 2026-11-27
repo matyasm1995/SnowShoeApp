@@ -10,6 +10,7 @@ export const CONFIG = {
     refreshIntervalMs: 30000,
   },
   links: {
+    webAppUrl: 'https://to-guides.pages.dev',
     kattfjordeidetCameras: 'https://www.vegvesen.no/trafikk/webkamera',
     iticketPortal: 'https://portal.iticket.com/en/~manifests-new(192)',
     accidentReportForm:
