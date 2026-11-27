@@ -167,26 +167,107 @@ function findMinibusDriversColIndex(headerRow) {
   return -1;
 }
 
-function findStaffColumnIndex(headerRow, fullName, initials) {
-  const targetName = String(fullName || '').trim().toLowerCase();
+function normalizeNameForMatch(raw) {
+  return String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractStaffHeaderPrimaryName(rawHeader) {
+  const withoutParens = rawHeader.replace(/\([^)]*\)/g, ' ');
+  const beforePercent = withoutParens.split(/\d+\s*%/)[0] ?? withoutParens;
+  return normalizeNameForMatch(beforePercent);
+}
+
+function extractHeaderParenInitials(rawHeader) {
+  const out = [];
+  for (const m of rawHeader.matchAll(/\(([^)]+)\)/g)) {
+    const inside = (m[1] || '').trim().toLowerCase();
+    if (/^[a-zæøå]{2,3}$/.test(inside)) {
+      out.push(inside);
+    }
+  }
+  return out;
+}
+
+function findStaffColumnIndex(headerRow, fullName, initials, matrix) {
+  const targetNorm = normalizeNameForMatch(fullName || '');
+  const targetFirst = targetNorm.split(' ')[0] || '';
   const targetInit = String(initials || '').trim().toLowerCase();
   const maxCol = Math.min(STAFF_COL_END, headerRow.length - 1);
 
-  if (targetName) {
-    for (let c = STAFF_COL_START; c <= maxCol; c++) {
-      const h = normalizeHeader(headerRow[c]).toLowerCase();
-      if (h.includes(targetName)) return c;
+  const columns = [];
+  for (let c = STAFF_COL_START; c <= maxCol; c++) {
+    const raw = normalizeHeader(headerRow[c]);
+    if (!raw) continue;
+    columns.push({
+      c,
+      raw,
+      primary: extractStaffHeaderPrimaryName(raw),
+      parenInits: extractHeaderParenInitials(raw),
+    });
+  }
+
+  if (targetNorm) {
+    for (const col of columns) {
+      if (!col.primary) continue;
+      if (
+        col.primary === targetNorm ||
+        targetNorm.startsWith(`${col.primary} `) ||
+        (targetFirst.length >= 2 && col.primary === targetFirst)
+      ) {
+        return col.c;
+      }
     }
   }
 
   if (targetInit) {
-    for (let c = STAFF_COL_START; c <= maxCol; c++) {
-      const raw = normalizeHeader(headerRow[c]);
-      if (raw && cellContainsGuideInitials(raw, targetInit)) return c;
+    for (const col of columns) {
+      if (col.parenInits.includes(targetInit)) {
+        return col.c;
+      }
     }
   }
 
-  if ((targetName === 'michal' || targetInit === 'mh') && headerRow.length > MICHAL_CR_COL_INDEX) {
+  if (targetFirst.length >= 2) {
+    for (const col of columns) {
+      const tokens = col.primary.split(' ').filter(Boolean);
+      if (tokens.includes(targetFirst)) {
+        return col.c;
+      }
+    }
+  }
+
+  if (targetInit && Array.isArray(matrix) && matrix.length > 2) {
+    let bestCol = -1;
+    let bestCount = 0;
+    for (const col of columns) {
+      let hits = 0;
+      for (let r = 2; r < matrix.length; r++) {
+        const cell = String(matrix[r]?.[col.c] || '').trim().toLowerCase();
+        if (!cell) continue;
+        if (cell === targetInit) {
+          hits += 3;
+        } else {
+          const toks = cell.split(/[^a-z0-9æøå]+/).filter(Boolean);
+          if (toks.includes(targetInit) && !isOnDutyMarker(cell)) {
+            hits += 1;
+          }
+        }
+      }
+      if (hits > bestCount) {
+        bestCount = hits;
+        bestCol = col.c;
+      }
+    }
+    if (bestCol !== -1) return bestCol;
+  }
+
+  if ((targetFirst === 'michal' || targetInit === 'mh') && headerRow.length > MICHAL_CR_COL_INDEX) {
     return MICHAL_CR_COL_INDEX;
   }
 
@@ -208,21 +289,40 @@ function isOnDutyMarker(cellLower) {
   );
 }
 
+function staffCellHasOwnInitialsToken(rawCell, guideInitials) {
+  const targetLower = String(guideInitials || '').trim().toLowerCase();
+  if (!targetLower) return false;
+  const tokens = rawCell
+    .toLowerCase()
+    .split(/[^a-z0-9æøå]+/)
+    .filter((t) => t.length > 0);
+  return tokens.includes(targetLower);
+}
+
 function isDayOffMarker(rawCell, guideInitials) {
   const cellLower = rawCell.toLowerCase();
   if (!cellLower) return false;
-  if (cellContainsGuideInitials(rawCell, guideInitials)) {
-    return true;
-  }
-  return (
+  if (
     cellLower.includes('off') ||
     cellLower.includes('holiday') ||
     cellLower.includes('avspasering') ||
     cellLower.includes('unpaid') ||
     cellLower.includes('leave') ||
     cellLower.includes('request') ||
-    cellLower.includes('permisjon')
-  );
+    cellLower.includes('permisjon') ||
+    cellLower.includes('not available') ||
+    cellLower.includes('unavailable')
+  ) {
+    return true;
+  }
+  const targetLower = String(guideInitials || '').trim().toLowerCase();
+  if (targetLower && !AMBIGUOUS_WORD_INITIALS.has(targetLower) && staffCellHasOwnInitialsToken(rawCell, targetLower)) {
+    return true;
+  }
+  if (targetLower && !isOnDutyMarker(cellLower) && staffCellHasOwnInitialsToken(rawCell, targetLower)) {
+    return true;
+  }
+  return false;
 }
 
 function findRowIndexForMonthDay(matrix, monthIndex0, dayNumber) {
@@ -377,7 +477,7 @@ function buildIcsCalendar({ matrix, fontLines, profile, includeDaysOff, daysAhea
     rentalColIdx: findRentalCenterColIndex(headerRow),
     guidesColIdx: findGuidesOnDutyColIndex(headerRow),
     driversColIdx: findMinibusDriversColIndex(headerRow),
-    staffColIdx: findStaffColumnIndex(headerRow, profile.fullName, profile.initials),
+    staffColIdx: findStaffColumnIndex(headerRow, profile.fullName, profile.initials, matrix),
   };
 
   const today = getOsloTodayParts();

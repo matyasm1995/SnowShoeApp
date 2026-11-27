@@ -816,15 +816,136 @@ function pushFindRowForOsloDate(values, monthName, dayNum) {
   return -1;
 }
 
-function pushFindStaffCol(headerRow, subscriber) {
-  var targetName = String(subscriber.fullName || "").trim().toLowerCase();
-  var maxCol = Math.min(PUSH_STAFF_END, headerRow.length - 1);
-  for (var c = PUSH_STAFF_START; c <= maxCol; c++) {
-    var h = pushNormalizeHeader(headerRow[c]).toLowerCase();
-    if (targetName && h.indexOf(targetName) !== -1) return c;
+function pushNormalizeName(raw) {
+  var s = String(raw || "");
+  if (typeof s.normalize === "function") {
+    s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
+  return s
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function pushExtractHeaderPrimaryName(rawHeader) {
+  var withoutParens = String(rawHeader || "").replace(/\([^)]*\)/g, " ");
+  var beforePercent = withoutParens.split(/\d+\s*%/)[0] || withoutParens;
+  return pushNormalizeName(beforePercent);
+}
+
+function pushExtractHeaderParenInitials(rawHeader) {
+  var out = [];
+  var re = /\(([^)]+)\)/g;
+  var m;
+  while ((m = re.exec(String(rawHeader || ""))) !== null) {
+    var inside = String(m[1] || "").trim().toLowerCase();
+    if (/^[a-zæøå]{2,3}$/.test(inside)) {
+      out.push(inside);
+    }
+  }
+  return out;
+}
+
+function pushStaffCellHasToken(rawCell, targetLower) {
+  if (!targetLower) return false;
+  var tokens = String(rawCell || "")
+    .toLowerCase()
+    .split(/[^a-z0-9æøå]+/);
+  for (var i = 0; i < tokens.length; i++) {
+    if (tokens[i] === targetLower) return true;
+  }
+  return false;
+}
+
+function pushIsOnDutyText(cellLower) {
+  return (
+    cellLower.indexOf("work") !== -1 ||
+    cellLower.indexOf("rc") !== -1 ||
+    cellLower.indexOf("sato") !== -1 ||
+    cellLower.indexOf("first aid") !== -1 ||
+    cellLower.indexOf("training") !== -1 ||
+    cellLower.indexOf("inventory") !== -1 ||
+    cellLower.indexOf("email") !== -1 ||
+    cellLower.indexOf("guiding") !== -1 ||
+    cellLower.indexOf("course") !== -1 ||
+    cellLower.indexOf("military") !== -1
+  );
+}
+
+function pushFindStaffCol(headerRow, subscriber, values) {
+  var targetNorm = pushNormalizeName(subscriber.fullName || "");
+  var targetFirst = targetNorm ? targetNorm.split(" ")[0] : "";
+  var targetInit = String(subscriber.initials || "").trim().toLowerCase();
+  var maxCol = Math.min(PUSH_STAFF_END, headerRow.length - 1);
+
+  var cols = [];
+  for (var c = PUSH_STAFF_START; c <= maxCol; c++) {
+    var raw = pushNormalizeHeader(headerRow[c]);
+    if (!raw) continue;
+    cols.push({
+      c: c,
+      raw: raw,
+      primary: pushExtractHeaderPrimaryName(raw),
+      parenInits: pushExtractHeaderParenInitials(raw)
+    });
+  }
+
+  if (targetNorm) {
+    for (var i = 0; i < cols.length; i++) {
+      var p = cols[i].primary;
+      if (!p) continue;
+      if (
+        p === targetNorm ||
+        targetNorm.indexOf(p + " ") === 0 ||
+        (targetFirst.length >= 2 && p === targetFirst)
+      ) {
+        return cols[i].c;
+      }
+    }
+  }
+
+  if (targetInit) {
+    for (var j = 0; j < cols.length; j++) {
+      if (cols[j].parenInits.indexOf(targetInit) !== -1) {
+        return cols[j].c;
+      }
+    }
+  }
+
+  if (targetFirst.length >= 2) {
+    for (var k = 0; k < cols.length; k++) {
+      var toks = cols[k].primary.split(" ");
+      if (toks.indexOf(targetFirst) !== -1) {
+        return cols[k].c;
+      }
+    }
+  }
+
+  if (targetInit && values && values.length > 2) {
+    var bestCol = -1;
+    var bestHits = 0;
+    for (var m = 0; m < cols.length; m++) {
+      var hits = 0;
+      for (var r = 2; r < values.length; r++) {
+        var cell = String((values[r] && values[r][cols[m].c]) || "").trim().toLowerCase();
+        if (!cell) continue;
+        if (cell === targetInit) {
+          hits += 3;
+        } else if (pushStaffCellHasToken(cell, targetInit) && !pushIsOnDutyText(cell)) {
+          hits += 1;
+        }
+      }
+      if (hits > bestHits) {
+        bestHits = hits;
+        bestCol = cols[m].c;
+      }
+    }
+    if (bestCol !== -1) return bestCol;
+  }
+
   if (
-    (targetName === "michal" || String(subscriber.initials || "").trim().toLowerCase() === "mh") &&
+    (targetFirst === "michal" || targetInit === "mh") &&
     headerRow.length > PUSH_MICHAL_COL
   ) {
     return PUSH_MICHAL_COL;
@@ -974,10 +1095,13 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
     title = "Tomorrow: Guiding — No Tour Assigned (" + dayLabel + ")";
     body = "Listed in Guides on Duty (Col AP), with no tour assigned yet.";
   } else {
-    var staffCol = pushFindStaffCol(headerRow, subscriber);
+    var staffCol = pushFindStaffCol(headerRow, subscriber, values);
     var isPartTime = subscriber.contractType === "part-time";
     var staffCell = staffCol !== -1 ? String(row[staffCol] || "").trim() : "";
     var staffLower = staffCell.toLowerCase();
+    var initLower = String(initials || "").trim().toLowerCase();
+    var hasOwnInit = pushStaffCellHasToken(staffCell, initLower);
+    var isAmbiguousInit = !!PUSH_AMBIGUOUS_INITIALS[initLower];
 
     var isOff = false;
     if (staffCol === -1) {
@@ -985,29 +1109,22 @@ function pushBuildNotificationForGuide(headerRow, row, fontLineRow, subscriber, 
     } else if (!staffLower) {
       isOff = isPartTime;
     } else if (
-      pushCellContainsInitials(staffCell, initials) ||
       staffLower.indexOf("off") !== -1 ||
       staffLower.indexOf("holiday") !== -1 ||
       staffLower.indexOf("avspasering") !== -1 ||
       staffLower.indexOf("unpaid") !== -1 ||
       staffLower.indexOf("leave") !== -1 ||
       staffLower.indexOf("request") !== -1 ||
-      staffLower.indexOf("permisjon") !== -1
+      staffLower.indexOf("permisjon") !== -1 ||
+      staffLower.indexOf("not available") !== -1 ||
+      staffLower.indexOf("unavailable") !== -1 ||
+      (hasOwnInit && !isAmbiguousInit)
     ) {
       isOff = true;
-    } else if (
-      staffLower.indexOf("work") !== -1 ||
-      staffLower.indexOf("rc") !== -1 ||
-      staffLower.indexOf("sato") !== -1 ||
-      staffLower.indexOf("first aid") !== -1 ||
-      staffLower.indexOf("training") !== -1 ||
-      staffLower.indexOf("inventory") !== -1 ||
-      staffLower.indexOf("email") !== -1 ||
-      staffLower.indexOf("guiding") !== -1 ||
-      staffLower.indexOf("course") !== -1 ||
-      staffLower.indexOf("military") !== -1
-    ) {
+    } else if (pushIsOnDutyText(staffLower)) {
       isOff = false;
+    } else if (hasOwnInit) {
+      isOff = true;
     } else {
       isOff = !isPartTime;
     }

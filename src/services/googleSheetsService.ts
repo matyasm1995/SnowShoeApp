@@ -780,19 +780,119 @@ function classifyCellColor(hexColor: string): TourColorStatus {
   return 'open';
 }
 
-function findStaffColumnIndex(headerRow: string[], profile: GuideProfile): number {
-  const targetName = profile.fullName.trim().toLowerCase();
+function normalizeNameForMatch(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractStaffHeaderPrimaryName(rawHeader: string): string {
+  const withoutParens = rawHeader.replace(/\([^)]*\)/g, ' ');
+  const beforePercent = withoutParens.split(/\d+\s*%/)[0] ?? withoutParens;
+  return normalizeNameForMatch(beforePercent);
+}
+
+function extractHeaderParenInitials(rawHeader: string): string[] {
+  const out: string[] = [];
+  for (const m of rawHeader.matchAll(/\(([^)]+)\)/g)) {
+    const inside = (m[1] ?? '').trim().toLowerCase();
+    if (/^[a-zæøå]{2,3}$/.test(inside)) {
+      out.push(inside);
+    }
+  }
+  return out;
+}
+
+function findStaffColumnIndex(
+  headerRow: string[],
+  profile: GuideProfile,
+  matrix?: string[][]
+): number {
+  const targetNorm = normalizeNameForMatch(profile.fullName || '');
+  const targetFirst = targetNorm.split(' ')[0] ?? '';
+  const targetInit = profile.initials.trim().toLowerCase();
   const maxCol = Math.min(STAFF_COL_END, headerRow.length - 1);
 
+  const columns: { c: number; raw: string; primary: string; parenInits: string[] }[] = [];
   for (let c = STAFF_COL_START; c <= maxCol; c++) {
-    const h = normalizeHeader(headerRow[c]).toLowerCase();
-    if (targetName && h.includes(targetName)) {
-      return c;
+    const raw = normalizeHeader(headerRow[c]);
+    if (!raw) continue;
+    columns.push({
+      c,
+      raw,
+      primary: extractStaffHeaderPrimaryName(raw),
+      parenInits: extractHeaderParenInitials(raw),
+    });
+  }
+
+  // 1. Exact header primary name match (e.g. "Lukas" -> "lukas", never "Lukasz"; "Ana" -> "ana", never "Ivana";
+  //    "Ida-Lina Berg" or "Ida Lina" -> "ida lina"; "Kateřina Novak" -> "katerina")
+  if (targetNorm) {
+    for (const col of columns) {
+      if (!col.primary) continue;
+      if (
+        col.primary === targetNorm ||
+        targetNorm.startsWith(`${col.primary} `) ||
+        (targetFirst.length >= 2 && col.primary === targetFirst)
+      ) {
+        return col.c;
+      }
+    }
+  }
+
+  // 2. Explicit parenthesized initials in header, e.g. "Annika 20% (ak)", "Ida-Lina 20% (id)", "Ivana ... (iv)"
+  if (targetInit) {
+    for (const col of columns) {
+      if (col.parenInits.includes(targetInit)) {
+        return col.c;
+      }
+    }
+  }
+
+  // 3. Whole-word token match in header primary name (e.g. "Ida" -> "Ida-Lina", never substring like "lukas" in "lukasz")
+  if (targetFirst.length >= 2) {
+    for (const col of columns) {
+      const tokens = col.primary.split(' ').filter(Boolean);
+      if (tokens.includes(targetFirst)) {
+        return col.c;
+      }
+    }
+  }
+
+  // 4. Fallback: scan staff column cells for standalone matching initials (e.g. "le", "ls", "lk", "kt", "he", "mh", "to")
+  if (targetInit && matrix && matrix.length > 2) {
+    let bestCol = -1;
+    let bestCount = 0;
+    for (const col of columns) {
+      let hits = 0;
+      for (let r = 2; r < matrix.length; r++) {
+        const cell = (matrix[r]?.[col.c] || '').toString().trim().toLowerCase();
+        if (!cell) continue;
+        if (cell === targetInit) {
+          hits += 3;
+        } else {
+          const toks = cell.split(/[^a-z0-9æøå]+/).filter(Boolean);
+          if (toks.includes(targetInit) && !isOnDutyMarker(cell)) {
+            hits += 1;
+          }
+        }
+      }
+      if (hits > bestCount) {
+        bestCount = hits;
+        bestCol = col.c;
+      }
+    }
+    if (bestCol !== -1) {
+      return bestCol;
     }
   }
 
   if (
-    (targetName === 'michal' || profile.initials.trim().toLowerCase() === 'mh') &&
+    (targetFirst === 'michal' || targetInit === 'mh') &&
     headerRow.length > MICHAL_CR_COL_INDEX
   ) {
     return MICHAL_CR_COL_INDEX;
@@ -849,12 +949,17 @@ function cellContainsGuideInitials(cellValue: unknown, guideInitials: string): b
   return false;
 }
 
-function isDayOffMarker(rawCell: string, guideInitials: string): boolean {
-  const cellLower = rawCell.toLowerCase();
-  if (!cellLower) return false;
-  if (cellContainsGuideInitials(rawCell, guideInitials)) {
-    return true;
-  }
+function staffCellHasOwnInitialsToken(rawCell: string, guideInitials: string): boolean {
+  const targetLower = guideInitials.trim().toLowerCase();
+  if (!targetLower) return false;
+  const tokens = rawCell
+    .toLowerCase()
+    .split(/[^a-z0-9æøå]+/)
+    .filter((t) => t.length > 0);
+  return tokens.includes(targetLower);
+}
+
+function isExplicitDayOffKeyword(cellLower: string): boolean {
   return (
     cellLower.includes('off') ||
     cellLower.includes('holiday') ||
@@ -862,8 +967,28 @@ function isDayOffMarker(rawCell: string, guideInitials: string): boolean {
     cellLower.includes('unpaid') ||
     cellLower.includes('leave') ||
     cellLower.includes('request') ||
-    cellLower.includes('permisjon')
+    cellLower.includes('permisjon') ||
+    cellLower.includes('not available') ||
+    cellLower.includes('unavailable')
   );
+}
+
+function isDayOffMarker(rawCell: string, guideInitials: string): boolean {
+  const cellLower = rawCell.toLowerCase();
+  if (!cellLower) return false;
+  if (isExplicitDayOffKeyword(cellLower)) {
+    return true;
+  }
+  const targetLower = guideInitials.trim().toLowerCase();
+  // Non-ambiguous initials anywhere in the cell (even combined with other text, e.g. "ls skatteetaten", "9.11. lk")
+  if (targetLower && !AMBIGUOUS_WORD_INITIALS.has(targetLower) && staffCellHasOwnInitialsToken(rawCell, targetLower)) {
+    return true;
+  }
+  // Ambiguous initials (e.g. "he - from next period", "to") count as day off unless cell is an on-duty note
+  if (targetLower && !isOnDutyMarker(cellLower) && staffCellHasOwnInitialsToken(rawCell, targetLower)) {
+    return true;
+  }
+  return false;
 }
 
 function findRentalCenterColIndex(headerRow: string[]): number {
@@ -962,12 +1087,19 @@ export function calculateDutyStatus(
   const guidesOnDutyColIdx = hasMatrix
     ? findGuidesOnDutyColIndex(headerRow)
     : GUIDES_ON_DUTY_COL_INDEX;
+  const minibusDriversColIdx = hasMatrix ? findMinibusDriversColIndex(headerRow) : -1;
 
   const rawRentalCell = hasMatrix ? (row[rentalColIdx] || '').toString().trim() : '';
   const rawGuidesCell = hasMatrix ? (row[guidesOnDutyColIdx] || '').toString().trim() : '';
+  const rawDriversCell =
+    hasMatrix && minibusDriversColIdx >= 0
+      ? (row[minibusDriversColIdx] || '').toString().trim()
+      : '';
 
   const inRentalCenter = hasMatrix && cellContainsGuideInitials(rawRentalCell, profile.initials);
   const inGuidesOnDuty = hasMatrix && cellContainsGuideInitials(rawGuidesCell, profile.initials);
+  const inMinibusDrivers =
+    hasMatrix && rawDriversCell.length > 0 && cellContainsGuideInitials(rawDriversCell, profile.initials);
 
   if (assignmentsCount > 0) {
     if (inRentalCenter) {
@@ -994,7 +1126,7 @@ export function calculateDutyStatus(
     };
   }
 
-  // 0-tour days: check Column C (Rental Center) and Column AP (Guides on Duty) first
+  // 0-tour days: check Column C (Rental Center), Column AP (Guides on Duty), and Minibus Drivers first
   if (inRentalCenter && inGuidesOnDuty) {
     return {
       type: 'base',
@@ -1023,7 +1155,15 @@ export function calculateDutyStatus(
     };
   }
 
-  const nameColIdx = findStaffColumnIndex(headerRow, profile);
+  if (inMinibusDrivers) {
+    return {
+      type: 'base',
+      title: 'Minibus Driver Duty',
+      detail: `Listed in Minibus Drivers: "${rawDriversCell}".`,
+    };
+  }
+
+  const nameColIdx = findStaffColumnIndex(headerRow, profile, matrix);
 
   if (nameColIdx === -1) {
     return profile.contractType === 'full-time'
