@@ -36,7 +36,7 @@ import { CONFIG } from '../config';
 import { useActiveTour } from '../context/ActiveTourContext';
 import { useRoster } from '../hooks/useRoster';
 import { colors, sharedStyles, touchTarget } from '../theme';
-import { parseGuestsFromComment } from '../utils/commentParser';
+import { parseGuestsFromCommentBlocks } from '../utils/commentParser';
 import {
   parseIticketManifestXlsx,
   parseIticketPastedText,
@@ -85,16 +85,19 @@ export function RosterScreen() {
   const parsedCandidates = useMemo(() => {
     if (!activeAssignment) return [];
 
-    const commentTexts = (activeAssignment.commentsList || []).map((c) => {
-      const replyTexts = (c.replies || []).map((r) => r.content).join('\n');
-      return `${c.content}\n${replyTexts}`;
-    });
-
-    if (activeAssignment.cellNote) {
-      commentTexts.push(activeAssignment.cellNote);
+    const commentBlocks: string[] = [];
+    for (const c of activeAssignment.commentsList || []) {
+      if (c.content) commentBlocks.push(c.content);
+      for (const r of c.replies || []) {
+        if (r.content) commentBlocks.push(r.content);
+      }
     }
 
-    return parseGuestsFromComment(commentTexts.join('\n'));
+    if (activeAssignment.cellNote) {
+      commentBlocks.push(activeAssignment.cellNote);
+    }
+
+    return parseGuestsFromCommentBlocks(commentBlocks);
   }, [activeAssignment]);
 
   const handleImportCandidates = () => {
