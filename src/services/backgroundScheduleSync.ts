@@ -11,7 +11,11 @@ import {
   isGuideProfileConfigured,
   parseGuideAssignments,
 } from './googleSheetsService';
-import { scheduleTomorrowDispatchNotification } from './notificationService';
+import {
+  scheduleTomorrowDispatchNotification,
+  syncTripReportNotifications,
+} from './notificationService';
+import { loadSubmittedReports } from './tripReportService';
 
 export const BACKGROUND_SCHEDULE_SYNC_TASK = 'arctic-guide-background-schedule-sync';
 
@@ -69,7 +73,22 @@ if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(BACKGROUND_SCHEDULE_SYNC
         return BackgroundFetch.BackgroundFetchResult.NoData;
       }
 
-      const [profile, fresh] = await Promise.all([getGuideProfile(), downloadSchedule()]);
+      const [profile, fresh, submittedReports] = await Promise.all([
+        getGuideProfile(),
+        downloadSchedule(),
+        loadSubmittedReports(),
+      ]);
+
+      const { assignments: todayAssignments } = parseGuideAssignments(
+        fresh.values,
+        fresh.notes,
+        fresh.comments,
+        fresh.backgrounds,
+        fresh.fontLines,
+        profile.initials,
+        now
+      );
+      await syncTripReportNotifications(todayAssignments, submittedReports, now);
 
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);

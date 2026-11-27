@@ -290,9 +290,19 @@ export function ActiveTourProvider({ children }: { children: ReactNode }) {
   }, [needsSetup, profile]);
 
   useEffect(() => {
-    if (needsSetup) return;
-    void syncTripReportNotifications(parsed.assignments, submittedReports, selectedDate);
-  }, [parsed.assignments, submittedReports, selectedDate, needsSetup]);
+    if (needsSetup || !syncData) return;
+    const today = new Date();
+    const { assignments: todayAssignments } = parseGuideAssignments(
+      syncData.values,
+      syncData.notes,
+      syncData.comments,
+      syncData.backgrounds,
+      syncData.fontLines,
+      profile.initials,
+      today
+    );
+    void syncTripReportNotifications(todayAssignments, submittedReports, today);
+  }, [syncData, profile.initials, submittedReports, needsSetup]);
 
   useEffect(() => {
     if (needsSetup || !syncData) return;

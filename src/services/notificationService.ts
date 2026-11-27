@@ -163,45 +163,63 @@ export async function registerDeviceForPushDispatch(
   }
 }
 
-export async function syncTripReportNotifications(
+const TRIP_REPORT_ID_PREFIX = 'trip-report:';
+let tripReportSyncChain: Promise<void> = Promise.resolve();
+
+function isTripReportNotification(item: Notifications.NotificationRequest): boolean {
+  if (item.identifier.startsWith(TRIP_REPORT_ID_PREFIX)) return true;
+  const data = item.content.data;
+  if (!data || typeof data !== 'object') return false;
+  return data.type === 'trip_report' || typeof data.tourKey === 'string';
+}
+
+function getScheduledTriggerMs(item: Notifications.NotificationRequest): number | null {
+  const trigger = item.trigger as { value?: unknown; date?: unknown } | null;
+  if (!trigger || typeof trigger !== 'object') return null;
+  if (typeof trigger.value === 'number' && Number.isFinite(trigger.value)) {
+    return trigger.value;
+  }
+  if (typeof trigger.date === 'number' && Number.isFinite(trigger.date)) {
+    return trigger.date;
+  }
+  if (trigger.date instanceof Date && Number.isFinite(trigger.date.getTime())) {
+    return trigger.date.getTime();
+  }
+  return null;
+}
+
+async function syncTripReportNotificationsInternal(
   assignments: GuideAssignment[],
   submittedReports: Record<string, SubmittedTripReportRecord>,
   targetDate: Date
 ): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     const todayKey = osloDateKey(new Date());
     if (osloDateKey(targetDate) !== todayKey) return;
-    if (assignments.length === 0) return;
 
     const granted = await ensureNotificationPermission();
     if (!granted) return;
 
-    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-    const existingByTourKey = new Map<string, string>();
-    for (const item of scheduled) {
-      const k = item.content.data?.tourKey;
-      if (typeof k === 'string') {
-        existingByTourKey.set(k, item.identifier);
+    const desiredById = new Map<
+      string,
+      {
+        identifier: string;
+        tourKey: string;
+        tourIdx: number;
+        tourName: string;
+        triggerDate: Date;
       }
-    }
+    >();
 
     for (let idx = 0; idx < assignments.length; idx++) {
       const tour = assignments[idx];
       if (!tour) continue;
 
       const tourKey = `${todayKey}_${tour.tourName.replace(/\s+/g, '_')}_${idx}`;
-      const existingId = existingByTourKey.get(tourKey);
       const isSubmitted = Boolean(submittedReports[tourKey]);
       const isDriverOnly = tour.role === 'driver';
-
-      if (isSubmitted || isDriverOnly) {
-        if (existingId) {
-          await Notifications.cancelScheduledNotificationAsync(existingId);
-        }
-        continue;
-      }
-
-      if (tour.endMinutes === null || existingId) continue;
+      if (isSubmitted || isDriverOnly || tour.endMinutes === null) continue;
 
       const remindMinutes = tour.endMinutes + 15;
       const triggerDate = new Date();
@@ -214,21 +232,60 @@ export async function syncTripReportNotifications(
 
       if (triggerDate.getTime() <= Date.now() + 60000) continue;
 
+      const identifier = `${TRIP_REPORT_ID_PREFIX}${tourKey}`;
+      desiredById.set(identifier, {
+        identifier,
+        tourKey,
+        tourIdx: idx,
+        tourName: tour.tourName,
+        triggerDate,
+      });
+    }
+
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    const alreadyUpToDateIds = new Set<string>();
+
+    for (const item of scheduled) {
+      if (!isTripReportNotification(item)) continue;
+
+      const desired = desiredById.get(item.identifier);
+      const scheduledMs = getScheduledTriggerMs(item);
+      const matchesTime =
+        desired !== undefined &&
+        scheduledMs !== null &&
+        Math.abs(scheduledMs - desired.triggerDate.getTime()) < 60000;
+
+      if (desired && matchesTime && !alreadyUpToDateIds.has(item.identifier)) {
+        alreadyUpToDateIds.add(item.identifier);
+        continue;
+      }
+
+      // Cancel stale tours (e.g. swapped from Ski -> Fatbike), legacy random-UUID duplicates,
+      // submitted/driver-only tours, or rescheduled times.
+      try {
+        await Notifications.cancelScheduledNotificationAsync(item.identifier);
+      } catch {}
+    }
+
+    for (const desired of desiredById.values()) {
+      if (alreadyUpToDateIds.has(desired.identifier)) continue;
+
       await Notifications.scheduleNotificationAsync({
+        identifier: desired.identifier,
         content: {
           title: 'Post-Trip Report Reminder',
-          body: `${tour.tourName} finished — tap to fill out your trip report.`,
+          body: `${desired.tourName} finished — tap to fill out your trip report.`,
           data: {
             type: 'trip_report',
-            tourKey,
-            tourIdx: idx,
+            tourKey: desired.tourKey,
+            tourIdx: desired.tourIdx,
             dateIso: todayKey,
             openReport: true,
           },
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: triggerDate,
+          date: desired.triggerDate,
         },
       });
     }
@@ -237,11 +294,29 @@ export async function syncTripReportNotifications(
   }
 }
 
+export function syncTripReportNotifications(
+  assignments: GuideAssignment[],
+  submittedReports: Record<string, SubmittedTripReportRecord>,
+  targetDate: Date
+): Promise<void> {
+  const next = tripReportSyncChain
+    .catch(() => {})
+    .then(() => syncTripReportNotificationsInternal(assignments, submittedReports, targetDate));
+  tripReportSyncChain = next;
+  return next;
+}
+
 export async function cancelTripReportNotification(tourKey: string): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
+    const canonicalId = `${TRIP_REPORT_ID_PREFIX}${tourKey}`;
+    try {
+      await Notifications.cancelScheduledNotificationAsync(canonicalId);
+    } catch {}
+
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
     for (const item of scheduled) {
-      if (item.content.data?.tourKey === tourKey) {
+      if (item.identifier === canonicalId || item.content.data?.tourKey === tourKey) {
         await Notifications.cancelScheduledNotificationAsync(item.identifier);
       }
     }
