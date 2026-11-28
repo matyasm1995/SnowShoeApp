@@ -48,10 +48,23 @@ function doGet(e) {
   try {
     var params = (e && e.parameter) ? e.parameter : {};
     var isCompactV2 = String(params.v || "") === "2";
+    var isLite = isCompactV2 && String(params.lite || "") === "1";
     var daysAhead = parseInt(params.days || "40", 10);
     if (!isFinite(daysAhead) || daysAhead < 7) daysAhead = 40;
     if (daysAhead > 90) daysAhead = 90;
     var clientHash = String(params.hash || "").trim();
+
+    var liteCacheKey = "cal_lite_v2_" + daysAhead;
+    if (isLite) {
+      try {
+        var cachedLite = CacheService.getScriptCache().get(liteCacheKey);
+        if (cachedLite) {
+          return ContentService
+            .createTextOutput(cachedLite)
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+      } catch (cacheErr) {}
+    }
 
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheets()[0];
@@ -72,125 +85,131 @@ function doGet(e) {
     if (lastRow > 0 && lastCol > 0) {
       var range = sheet.getRange(1, 1, lastRow, lastCol);
       values = range.getValues();
-      notes = range.getNotes();
-      backgrounds = range.getBackgrounds();
       fontLines = range.getFontLines();
-    }
-
-    var result = Sheets.Spreadsheets.get(SPREADSHEET_ID, {
-      commentsViewMode: "COMMENTS_VIEW_MODE_INCLUDED",
-      fields:
-        "comments(commentId,anchorId,status,plainTextQuote," +
-        "headPost(postId,content,author(displayName,user,me)," +
-        "createTime,updateTime)," +
-        "replies(postId,content,author(displayName,user,me)," +
-        "createTime,updateTime))," +
-        "sheets(properties(sheetId,title)," +
-        "commentAnchors(anchorId,range(sheetId,startRowIndex," +
-        "endRowIndex,startColumnIndex,endColumnIndex)))"
-    });
-
-    var anchorMap = {};
-    (result.sheets || []).forEach(function(s) {
-      var sheetName = s.properties.title;
-      (s.commentAnchors || []).forEach(function(anchor) {
-        anchorMap[anchor.anchorId] = {
-          sheet: sheetName,
-          range: anchor.range
-        };
-      });
-    });
-
-    function columnLetter(n) {
-      var letter = "";
-      while (n > 0) {
-        var remainder = (n - 1) % 26;
-        letter = String.fromCharCode(65 + remainder) + letter;
-        n = Math.floor((n - 1) / 26);
+      if (!isLite) {
+        notes = range.getNotes();
+        backgrounds = range.getBackgrounds();
       }
-      return letter;
-    }
-
-    function formatPost(post) {
-      if (!post) return null;
-      return {
-        postId: post.postId || "",
-        content: post.content || "",
-        author: post.author ? post.author.displayName || "" : "",
-        authorId: post.author ? post.author.user || "" : "",
-        createdTime: post.createTime || "",
-        updatedTime: post.updateTime || ""
-      };
     }
 
     var comments = [];
-    (result.comments || []).forEach(function(c) {
-      var location = anchorMap[c.anchorId] || null;
-      if (location && location.sheet !== tabName) {
-        return;
+    if (!isLite) {
+      var result = Sheets.Spreadsheets.get(SPREADSHEET_ID, {
+        commentsViewMode: "COMMENTS_VIEW_MODE_INCLUDED",
+        fields:
+          "comments(commentId,anchorId,status,plainTextQuote," +
+          "headPost(postId,content,author(displayName,user,me)," +
+          "createTime,updateTime)," +
+          "replies(postId,content,author(displayName,user,me)," +
+          "createTime,updateTime))," +
+          "sheets(properties(sheetId,title)," +
+          "commentAnchors(anchorId,range(sheetId,startRowIndex," +
+          "endRowIndex,startColumnIndex,endColumnIndex)))"
+      });
+
+      var anchorMap = {};
+      (result.sheets || []).forEach(function(s) {
+        var sheetName = s.properties.title;
+        (s.commentAnchors || []).forEach(function(anchor) {
+          anchorMap[anchor.anchorId] = {
+            sheet: sheetName,
+            range: anchor.range
+          };
+        });
+      });
+
+      function columnLetter(n) {
+        var letter = "";
+        while (n > 0) {
+          var remainder = (n - 1) % 26;
+          letter = String.fromCharCode(65 + remainder) + letter;
+          n = Math.floor((n - 1) / 26);
+        }
+        return letter;
       }
 
-      var cell = null;
-      var cellRange = null;
-      var row = null;
-      var column = null;
-
-      if (location && location.range) {
-        var r = location.range;
-        var startRow = r.startRowIndex + 1;
-        var endRow = r.endRowIndex;
-        var startCol = r.startColumnIndex + 1;
-        var endCol = r.endColumnIndex;
-
-        var startCell = columnLetter(startCol) + startRow;
-        var endCell = columnLetter(endCol) + endRow;
-
-        cell = startCell === endCell ? startCell : startCell + ":" + endCell;
-        cellRange = {
-          startRow: startRow,
-          endRow: endRow,
-          startColumn: startCol,
-          endColumn: endCol
+      function formatPost(post) {
+        if (!post) return null;
+        return {
+          postId: post.postId || "",
+          content: post.content || "",
+          author: post.author ? post.author.displayName || "" : "",
+          authorId: post.author ? post.author.user || "" : "",
+          createdTime: post.createTime || "",
+          updatedTime: post.updateTime || ""
         };
-        row = startRow;
-        column = startCol;
       }
 
-      var headPost = formatPost(c.headPost);
-      var replies = (c.replies || []).map(function(reply) {
-        return formatPost(reply);
-      });
+      (result.comments || []).forEach(function(c) {
+        var location = anchorMap[c.anchorId] || null;
+        if (location && location.sheet !== tabName) {
+          return;
+        }
 
-      comments.push({
-        commentId: c.commentId || "",
-        comment: headPost ? headPost.content : "",
-        author: headPost ? headPost.author : "",
-        authorId: headPost ? headPost.authorId : "",
-        createdTime: headPost ? headPost.createTime : "",
-        updatedTime: headPost ? headPost.updateTime : "",
-        status: c.status || "UNKNOWN",
-        quotedText: c.plainTextQuote || "",
-        sheet: location ? location.sheet : null,
-        cell: cell,
-        row: row,
-        column: column,
-        cellRange: cellRange,
-        replyCount: replies.length,
-        replies: replies
+        var cell = null;
+        var cellRange = null;
+        var row = null;
+        var column = null;
+
+        if (location && location.range) {
+          var r = location.range;
+          var startRow = r.startRowIndex + 1;
+          var endRow = r.endRowIndex;
+          var startCol = r.startColumnIndex + 1;
+          var endCol = r.endColumnIndex;
+
+          var startCell = columnLetter(startCol) + startRow;
+          var endCell = columnLetter(endCol) + endRow;
+
+          cell = startCell === endCell ? startCell : startCell + ":" + endCell;
+          cellRange = {
+            startRow: startRow,
+            endRow: endRow,
+            startColumn: startCol,
+            endColumn: endCol
+          };
+          row = startRow;
+          column = startCol;
+        }
+
+        var headPost = formatPost(c.headPost);
+        var replies = (c.replies || []).map(function(reply) {
+          return formatPost(reply);
+        });
+
+        comments.push({
+          commentId: c.commentId || "",
+          comment: headPost ? headPost.content : "",
+          author: headPost ? headPost.author : "",
+          authorId: headPost ? headPost.authorId : "",
+          createdTime: headPost ? headPost.createTime : "",
+          updatedTime: headPost ? headPost.updateTime : "",
+          status: c.status || "UNKNOWN",
+          quotedText: c.plainTextQuote || "",
+          sheet: location ? location.sheet : null,
+          cell: cell,
+          row: row,
+          column: column,
+          cellRange: cellRange,
+          replyCount: replies.length,
+          replies: replies
+        });
       });
-    });
+    }
 
     var managerNotes = [];
-    try {
-      var notesSs = SpreadsheetApp.openById(MANAGER_NOTES_SPREADSHEET_ID);
-      var notesSheet = notesSs.getSheets()[0];
-      if (notesSheet && notesSheet.getLastRow() > 0 && notesSheet.getLastColumn() > 0) {
-        managerNotes = notesSheet
-          .getRange(1, 1, notesSheet.getLastRow(), notesSheet.getLastColumn())
-          .getDisplayValues();
+    if (!isLite) {
+      try {
+        var notesSs = SpreadsheetApp.openById(MANAGER_NOTES_SPREADSHEET_ID);
+        var notesSheet = notesSs.getSheets()[0];
+        if (notesSheet && notesSheet.getLastRow() > 0 && notesSheet.getLastColumn() > 0) {
+          managerNotes = notesSheet
+            .getRange(1, 1, notesSheet.getLastRow(), notesSheet.getLastColumn())
+            .getDisplayValues();
+        }
+      } catch (notesErr) {
+        managerNotes = [];
       }
-    } catch (notesErr) {
-      managerNotes = [];
     }
 
     // Compact v2 response: ~90-95% smaller payload + MD5 not_modified check
@@ -311,6 +330,25 @@ function doGet(e) {
             };
           })
         });
+      }
+
+      if (isLite) {
+        var liteOut = JSON.stringify({
+          status: "success",
+          format: "v2",
+          lite: true,
+          tabUsed: tabName,
+          totalColumns: lastCol,
+          rows: compactRows
+        });
+        if (liteOut.length < 95000) {
+          try {
+            CacheService.getScriptCache().put(liteCacheKey, liteOut, 300);
+          } catch (putErr) {}
+        }
+        return ContentService
+          .createTextOutput(liteOut)
+          .setMimeType(ContentService.MimeType.JSON);
       }
 
       var corePayload = {

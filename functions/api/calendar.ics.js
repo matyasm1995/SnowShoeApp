@@ -375,6 +375,27 @@ function hasAssignedTourOnRow(headerRow, row, fontLineRow, initials) {
   return false;
 }
 
+function countNonEmptyStaffCells(row) {
+  const maxCol = Math.min(STAFF_COL_END, row.length - 1);
+  let count = 0;
+  for (let c = STAFF_COL_START; c <= maxCol; c++) {
+    if (String(row[c] || '').trim().length > 0) {
+      count++;
+    }
+  }
+  return count;
+}
+
+function isRowSchedulePublished(row, cols) {
+  const rawRental = String(row[cols.rentalColIdx] || '').trim();
+  const rawGuides = String(row[cols.guidesColIdx] || '').trim();
+  const rawDrivers = cols.driversColIdx >= 0 ? String(row[cols.driversColIdx] || '').trim() : '';
+  if (rawRental.length > 0 || rawGuides.length > 0 || rawDrivers.length > 0) {
+    return true;
+  }
+  return countNonEmptyStaffCells(row) >= 4;
+}
+
 function evaluateDayWorkStatus(matrix, fontLines, rowIdx, profile, cols) {
   const headerRow = matrix[1] || [];
   const row = matrix[rowIdx] || [];
@@ -396,7 +417,10 @@ function evaluateDayWorkStatus(matrix, fontLines, rowIdx, profile, cols) {
     return 'working';
   }
 
+  const isPublished = isRowSchedulePublished(row, cols);
+
   if (cols.staffColIdx === -1) {
+    if (!isPublished) return null;
     return profile.contractType === 'full-time' ? 'working' : 'day_off';
   }
 
@@ -404,6 +428,7 @@ function evaluateDayWorkStatus(matrix, fontLines, rowIdx, profile, cols) {
   const cellLower = rawCell.toLowerCase();
 
   if (cellLower.length === 0) {
+    if (!isPublished) return null;
     return profile.contractType === 'full-time' ? 'working' : 'day_off';
   }
 
@@ -414,6 +439,8 @@ function evaluateDayWorkStatus(matrix, fontLines, rowIdx, profile, cols) {
   if (isOnDutyMarker(cellLower)) {
     return 'working';
   }
+
+  if (!isPublished) return null;
 
   return profile.contractType === 'full-time' ? 'day_off' : 'working';
 }
@@ -457,17 +484,28 @@ function escapeIcsText(text) {
     .replace(/\r?\n/g, '\\n');
 }
 
+const utf8Encoder = new TextEncoder();
+
 function foldIcsLine(line) {
-  if (line.length <= 70) return line;
+  if (utf8Encoder.encode(line).length <= 75) return line;
   const parts = [];
-  let remaining = line;
-  let limit = 70;
-  while (remaining.length > limit) {
-    parts.push(remaining.slice(0, limit));
-    remaining = remaining.slice(limit);
-    limit = 69;
+  let current = '';
+  let currentBytes = 0;
+  let limit = 75;
+
+  for (const ch of line) {
+    const chBytes = utf8Encoder.encode(ch).length;
+    if (currentBytes + chBytes > limit && current.length > 0) {
+      parts.push(current);
+      current = ch;
+      currentBytes = chBytes;
+      limit = 74; // Continuation lines start with a 1-byte leading space
+    } else {
+      current += ch;
+      currentBytes += chBytes;
+    }
   }
-  if (remaining.length > 0) parts.push(remaining);
+  if (current.length > 0) parts.push(current);
   return parts.join('\r\n ');
 }
 
@@ -512,6 +550,7 @@ function buildIcsCalendar({ matrix, fontLines, profile, includeDaysOff, daysAhea
     if (rowIdx === -1) continue;
 
     const status = evaluateDayWorkStatus(matrix, fontLines, rowIdx, profile, cols);
+    if (!status) continue;
     if (status === 'day_off' && !includeDaysOff) continue;
 
     const ymd = formatIcsDate(startUtc);
@@ -540,6 +579,10 @@ function buildIcsCalendar({ matrix, fontLines, profile, includeDaysOff, daysAhea
   return `${lines.map(foldIcsLine).join('\r\n')}\r\n`;
 }
 
+const DEFAULT_DAYS_AHEAD = 40;
+const MAX_DAYS_AHEAD = 60;
+const UPSTREAM_CACHE_TTL_SECONDS = 900;
+
 function parseParams(url) {
   const initials = (url.searchParams.get('i') || url.searchParams.get('initials') || '').trim();
   const fullName = (url.searchParams.get('n') || url.searchParams.get('name') || '').trim();
@@ -551,9 +594,9 @@ function parseParams(url) {
   const includeDaysOff = (url.searchParams.get('off') || '1').trim() !== '0';
   const download = (url.searchParams.get('dl') || '0').trim() === '1';
 
-  let daysAhead = parseInt(url.searchParams.get('days') || '90', 10);
-  if (!Number.isFinite(daysAhead) || daysAhead < 7) daysAhead = 90;
-  if (daysAhead > 90) daysAhead = 90;
+  let daysAhead = parseInt(url.searchParams.get('days') || String(DEFAULT_DAYS_AHEAD), 10);
+  if (!Number.isFinite(daysAhead) || daysAhead < 7) daysAhead = DEFAULT_DAYS_AHEAD;
+  if (daysAhead > MAX_DAYS_AHEAD) daysAhead = MAX_DAYS_AHEAD;
 
   return {
     profile: { initials, fullName, contractType },
@@ -569,12 +612,66 @@ function buildHeaders(download, initials) {
     .replace(/[^a-z0-9]/g, '');
   const filename = `to-schedule-${safeName || 'guide'}.ics`;
 
-  return {
+  const headers = {
     'Content-Type': 'text/calendar; charset=utf-8',
-    'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
-    'Cache-Control': 'public, max-age=900',
+    'Cache-Control': `public, max-age=${UPSTREAM_CACHE_TTL_SECONDS}`,
     'Access-Control-Allow-Origin': '*',
   };
+
+  if (download) {
+    headers['Content-Disposition'] = `attachment; filename="${filename}"`;
+  }
+
+  return headers;
+}
+
+async function fetchUpstreamScheduleJson(context, daysAhead) {
+  const cacheKeyUrl = `https://to-guides.pages.dev/__internal/schedule-lite-v2?days=${daysAhead}`;
+  const cacheKey = new Request(cacheKeyUrl, { method: 'GET' });
+  const edgeCache = typeof caches !== 'undefined' && caches?.default ? caches.default : null;
+
+  if (edgeCache) {
+    try {
+      const cached = await edgeCache.match(cacheKey);
+      if (cached && cached.ok) {
+        return { ok: true, status: 200, data: await cached.json() };
+      }
+    } catch {
+      // Fall through to live fetch if edge cache lookup fails
+    }
+  }
+
+  const upstreamUrl = `${SCRIPT_URL}?v=2&days=${daysAhead}&lite=1`;
+  const res = await fetch(upstreamUrl, {
+    method: 'GET',
+    redirect: 'follow',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!res.ok) {
+    return { ok: false, status: res.status, data: null };
+  }
+
+  const rawText = await res.text();
+  const data = JSON.parse(rawText);
+
+  if (edgeCache && data && (Array.isArray(data.rows) || Array.isArray(data.values))) {
+    const cacheable = new Response(rawText, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': `public, max-age=${UPSTREAM_CACHE_TTL_SECONDS}`,
+      },
+    });
+    const putPromise = edgeCache.put(cacheKey, cacheable).catch(() => {});
+    if (context && typeof context.waitUntil === 'function') {
+      context.waitUntil(putPromise);
+    } else {
+      await putPromise;
+    }
+  }
+
+  return { ok: true, status: 200, data };
 }
 
 export async function onRequestHead(context) {
@@ -604,21 +701,15 @@ export async function onRequestGet(context) {
       );
     }
 
-    const upstreamUrl = `${SCRIPT_URL}?v=2&days=${daysAhead}`;
-    const res = await fetch(upstreamUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!res.ok) {
-      return new Response(`Upstream schedule error (HTTP ${res.status})`, {
+    const upstream = await fetchUpstreamScheduleJson(context, daysAhead);
+    if (!upstream.ok) {
+      return new Response(`Upstream schedule error (HTTP ${upstream.status})`, {
         status: 502,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    const data = await res.json();
+    const data = upstream.data;
     let matrix = [];
     let fontLines = [];
 

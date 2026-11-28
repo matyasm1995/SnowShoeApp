@@ -99,6 +99,19 @@ export function ScheduleCalendarModal({
     [profile, includeDaysOff]
   );
 
+  // Pre-warm Cloudflare edge cache & Apps Script cache before the user pastes into Google/Apple Calendar
+  useEffect(() => {
+    if (!visible || !showExportView || !exportLinks) return;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    fetch(exportLinks.httpsUrl, {
+      method: 'GET',
+      signal: controller?.signal,
+    }).catch(() => {});
+    return () => {
+      controller?.abort();
+    };
+  }, [visible, showExportView, exportLinks]);
+
   const monthBlocks = useMemo<MonthBlock[]>(() => {
     if (!visible) return [];
 
@@ -289,12 +302,25 @@ export function ScheduleCalendarModal({
 
   const handleOpenGoogleCalendar = async () => {
     if (!exportLinks) return;
+    if (Platform.OS === 'web') {
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(exportLinks.httpsUrl);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 3000);
+        }
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.open(exportLinks.googleCalendarAddUrl, '_blank', 'noopener,noreferrer');
+        return;
+      }
+    }
     try {
       await Linking.openURL(exportLinks.googleCalendarAddUrl);
     } catch {
       Alert.alert(
-        'Open Google Calendar',
-        'Copy the calendar link and add it in Google Calendar (web) under Other calendars (+) → From URL.'
+        'Open Google Calendar on Web',
+        'Google Calendar only lets you add URL feeds on the web (not in the Android app). Copy the link, open calendar.google.com on a computer (or Chrome → Desktop site), and go to Other calendars (+) → From URL.'
       );
     }
   };
@@ -362,8 +388,9 @@ export function ScheduleCalendarModal({
           {showExportView ? (
             <ScrollView contentContainerStyle={styles.exportBody}>
               <Text style={styles.exportIntro}>
-                Sync your Working &amp; Day Off schedule for the next 90 days as clean all-day
-                events (no shifting tour times). Updates automatically from Sheet 1.6.
+                Sync your published Working &amp; Day Off schedule (up to 40 days ahead, matching
+                the app) as clean all-day events. Unpublished future months are skipped
+                automatically.
               </Text>
 
               <View style={styles.toggleRow}>
@@ -441,8 +468,10 @@ export function ScheduleCalendarModal({
                   <View style={styles.exportCard}>
                     <Text style={styles.exportCardTitle}>Google Calendar (Auto-Sync)</Text>
                     <Text style={styles.exportHint}>
-                      In Google Calendar (web), click Other calendars (+) → From URL → paste this
-                      link. It then syncs automatically to your Android phone.
+                      Google Calendar only adds live URL feeds on the web (not inside the Android
+                      app). Copy the link below, open Google Calendar in a computer browser (or
+                      Chrome → Desktop site) → Other calendars (+) → From URL → paste &amp; Add
+                      calendar. It then syncs automatically to your phone.
                     </Text>
                     <View style={styles.urlBox}>
                       <Text selectable style={styles.urlText} numberOfLines={2}>
@@ -479,7 +508,7 @@ export function ScheduleCalendarModal({
                         ]}
                       >
                         <ExternalLink color={colors.textSecondary} size={15} />
-                        <Text style={styles.exportGhostBtnText}>Google Cal</Text>
+                        <Text style={styles.exportGhostBtnText}>Add by URL</Text>
                       </Pressable>
                     </View>
                   </View>

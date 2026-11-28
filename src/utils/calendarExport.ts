@@ -29,9 +29,10 @@ export function buildCalendarExportLinks(
   const httpsUrl = `${base}/api/calendar.ics?${query}`;
   const webcalUrl = httpsUrl.replace(/^https?:\/\//i, 'webcal://');
   const downloadUrl = `${httpsUrl}&dl=1`;
-  const googleCalendarAddUrl = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(
-    webcalUrl
-  )}`;
+  // Google Calendar's ?cid=webcal:// deep-link is ignored by the Android app and
+  // frequently fails on web; opening the Add-by-URL settings page directly is reliable.
+  const googleCalendarAddUrl =
+    'https://calendar.google.com/calendar/u/0/r/settings/addbyurl';
 
   return {
     httpsUrl,
