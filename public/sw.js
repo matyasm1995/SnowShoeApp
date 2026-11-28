@@ -77,32 +77,80 @@ self.addEventListener('push', (event) => {
 
   const notif = payload.notification || {};
   const data = payload.data || {};
-  const title = notif.title || data.title || "Tomorrow's Schedule";
-  const body = notif.body || data.body || 'Tap to view your updated schedule.';
+  const pushType = data.type || 'tomorrow_dispatch';
+  const isTripReport = pushType === 'trip_report';
+
+  const title =
+    notif.title ||
+    data.title ||
+    (isTripReport ? 'Post-Trip Report Reminder' : "Tomorrow's Schedule");
+  const body =
+    notif.body ||
+    data.body ||
+    (isTripReport
+      ? 'Tap to submit your post-trip report.'
+      : 'Tap to view your updated schedule.');
+
+  const tag = isTripReport
+    ? data.tourKey
+      ? `to-guides-trip-report-${data.tourKey}`
+      : 'to-guides-trip-report'
+    : 'to-guides-tomorrow-dispatch';
 
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
       icon: '/icon-512.png',
       badge: '/icon-512.png',
-      tag: 'to-guides-tomorrow-dispatch',
+      tag,
       renotify: true,
       data: {
-        type: data.type || 'tomorrow_dispatch',
-        targetDateIso: data.targetDateIso || '',
+        type: pushType,
+        targetDateIso: data.targetDateIso || data.dateIso || '',
+        dateIso: data.dateIso || data.targetDateIso || '',
+        tourIdx: data.tourIdx !== undefined ? String(data.tourIdx) : '',
+        tourKey: data.tourKey || '',
+        openReport: isTripReport ? '1' : '',
       },
     })
   );
 });
 
-// Deep-link to tomorrow's schedule when the user taps the notification
+// Deep-link when the user taps a Web Push notification
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification.data || {};
-  const targetDateIso = typeof data.targetDateIso === 'string' ? data.targetDateIso : '';
-  const targetUrl = targetDateIso
-    ? `/?targetDateIso=${encodeURIComponent(targetDateIso)}`
-    : '/';
+  const isTripReport = data.type === 'trip_report' || data.openReport === '1';
+
+  let targetUrl = '/';
+  let clientMessage = null;
+
+  if (isTripReport) {
+    const dateIso = typeof data.dateIso === 'string' ? data.dateIso : '';
+    const tourIdx = typeof data.tourIdx === 'string' ? data.tourIdx : '';
+    const tourKey = typeof data.tourKey === 'string' ? data.tourKey : '';
+    const qs = new URLSearchParams();
+    qs.set('openReport', '1');
+    if (dateIso) qs.set('dateIso', dateIso);
+    if (tourIdx !== '') qs.set('tourIdx', tourIdx);
+    if (tourKey) qs.set('tourKey', tourKey);
+    targetUrl = `/?${qs.toString()}`;
+    clientMessage = {
+      type: 'OPEN_TRIP_REPORT',
+      dateIso,
+      tourIdx,
+      tourKey,
+    };
+  } else {
+    const targetDateIso = typeof data.targetDateIso === 'string' ? data.targetDateIso : '';
+    targetUrl = targetDateIso
+      ? `/?targetDateIso=${encodeURIComponent(targetDateIso)}`
+      : '/';
+    clientMessage = {
+      type: 'OPEN_SCHEDULE_DATE',
+      targetDateIso,
+    };
+  }
 
   event.waitUntil(
     self.clients
@@ -110,10 +158,7 @@ self.addEventListener('notificationclick', (event) => {
       .then((windowClients) => {
         for (const client of windowClients) {
           if ('focus' in client) {
-            client.postMessage({
-              type: 'OPEN_SCHEDULE_DATE',
-              targetDateIso,
-            });
+            client.postMessage(clientMessage);
             return client.focus();
           }
         }

@@ -280,8 +280,31 @@ function AppShell() {
       if (typeof window !== 'undefined') {
         try {
           const params = new URLSearchParams(window.location.search);
+          const openReportParam = params.get('openReport');
           const iso = params.get('targetDateIso');
-          if (iso) {
+          if (openReportParam === '1') {
+            const dateIso = params.get('dateIso') || iso || '';
+            const rawIdx = params.get('tourIdx');
+            const parsedIdx =
+              rawIdx !== null && rawIdx !== '' ? parseInt(rawIdx, 10) : Number.NaN;
+            const tourKey = params.get('tourKey') || '';
+            setPendingNotifData({
+              type: 'trip_report',
+              openReport: true,
+              dateIso,
+              tourIdx: Number.isFinite(parsedIdx) && parsedIdx >= 0 ? parsedIdx : undefined,
+              tourKey: tourKey || undefined,
+              _handledAt: Date.now(),
+            });
+            params.delete('openReport');
+            params.delete('dateIso');
+            params.delete('targetDateIso');
+            params.delete('tourIdx');
+            params.delete('tourKey');
+            const qs = params.toString();
+            const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+            window.history.replaceState({}, '', cleanUrl);
+          } else if (iso) {
             setPendingNotifData({
               type: 'tomorrow_dispatch',
               targetDateIso: iso,
@@ -297,8 +320,29 @@ function AppShell() {
 
       if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         const onSwMessage = (event: MessageEvent) => {
-          const msg = event.data as { type?: string; targetDateIso?: string } | null;
-          if (msg?.type === 'OPEN_SCHEDULE_DATE') {
+          const msg = event.data as {
+            type?: string;
+            targetDateIso?: string;
+            dateIso?: string;
+            tourIdx?: string | number;
+            tourKey?: string;
+          } | null;
+          if (msg?.type === 'OPEN_TRIP_REPORT') {
+            const parsedIdx =
+              typeof msg.tourIdx === 'number'
+                ? msg.tourIdx
+                : typeof msg.tourIdx === 'string' && msg.tourIdx !== ''
+                  ? parseInt(msg.tourIdx, 10)
+                  : Number.NaN;
+            setPendingNotifData({
+              type: 'trip_report',
+              openReport: true,
+              dateIso: msg.dateIso || msg.targetDateIso || '',
+              tourIdx: Number.isFinite(parsedIdx) && parsedIdx >= 0 ? parsedIdx : undefined,
+              tourKey: msg.tourKey || undefined,
+              _handledAt: Date.now(),
+            });
+          } else if (msg?.type === 'OPEN_SCHEDULE_DATE') {
             setPendingNotifData({
               type: 'tomorrow_dispatch',
               targetDateIso: msg.targetDateIso || '',

@@ -498,6 +498,9 @@ function doPost(e) {
 
     var code = res.getResponseCode();
     if (code === 200 || code === 302) {
+      try {
+        recordSubmittedTripReport(body);
+      } catch (recErr) {}
       return ContentService
         .createTextOutput(JSON.stringify({ status: "success", httpCode: code }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -730,7 +733,14 @@ function pushParseStartTime(text) {
     if (sh >= 7 && sh <= 23 && sm >= 0 && sm <= 59 && eh >= 7 && eh <= 23 && em >= 0 && em <= 59) {
       if (sSep === "." && match[6] && eSep === "." && (sm % 5 !== 0 || em % 5 !== 0)) continue;
       if (eh * 60 + em > sh * 60 + sm) {
-        return { startMinutes: sh * 60 + sm, startLabel: pushFormatHHMM(sh * 60 + sm) };
+        var startMin = sh * 60 + sm;
+        var endMin = eh * 60 + em;
+        return {
+          startMinutes: startMin,
+          endMinutes: endMin,
+          startLabel: pushFormatHHMM(startMin),
+          endLabel: pushFormatHHMM(endMin)
+        };
       }
     }
   }
@@ -743,7 +753,13 @@ function pushParseStartTime(text) {
     var m = parseInt(smatch[3], 10);
     if (h >= 7 && h <= 23 && m >= 0 && m <= 59) {
       if (sep === "." && m % 5 !== 0) continue;
-      return { startMinutes: h * 60 + m, startLabel: pushFormatHHMM(h * 60 + m) };
+      var sMin = h * 60 + m;
+      return {
+        startMinutes: sMin,
+        endMinutes: null,
+        startLabel: pushFormatHHMM(sMin),
+        endLabel: null
+      };
     }
   }
   return null;
@@ -1564,3 +1580,461 @@ function testSendNotificationsNow() {
 function testAuth() {
   UrlFetchApp.fetch("https://google.com");
 }
+
+// ============================================================================
+// POST-TRIP REPORT REMINDERS FOR WEB / iPHONE PWA (FCM HTTP v1)
+// ============================================================================
+
+var SUBMITTED_REPORTS_PROP_KEY = "SUBMITTED_TRIP_REPORTS_V1";
+var POST_TRIP_SENT_PROP_KEY = "POST_TRIP_WEB_SENT_V1";
+
+function loadJsonPropObject(key) {
+  var raw = PropertiesService.getScriptProperties().getProperty(key);
+  if (!raw) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveJsonPropObject(key, obj) {
+  PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(obj || {}));
+}
+
+function getRecentOsloDateSet(daysBack) {
+  var allowed = {};
+  var now = new Date();
+  for (var d = 0; d <= daysBack; d++) {
+    var dt = new Date(now.getTime() - d * 24 * 60 * 60 * 1000);
+    allowed[Utilities.formatDate(dt, "Europe/Oslo", "yyyy-MM-dd")] = true;
+  }
+  return allowed;
+}
+
+/**
+ * Called from doPost() whenever a guide submits a post-trip report via the app.
+ * Stores a compact 3-day record so Web Push reminders are skipped for already-submitted trips.
+ */
+function recordSubmittedTripReport(body) {
+  var dateIso = String((body && body.dateIso) || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+    dateIso = Utilities.formatDate(new Date(), "Europe/Oslo", "yyyy-MM-dd");
+  }
+  var guideNorm = pushNormalizeName((body && body.guideName) || "");
+  var tourKey = String((body && body.tourKey) || "").trim();
+  var tripOpt = String((body && body.tripOption) || "").trim().toLowerCase();
+  if (!guideNorm && !tourKey) return;
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var map = loadJsonPropObject(SUBMITTED_REPORTS_PROP_KEY);
+    var keepDates = getRecentOsloDateSet(3);
+    keepDates[dateIso] = true;
+
+    var cleaned = {};
+    var existingDates = Object.keys(map);
+    for (var i = 0; i < existingDates.length; i++) {
+      var dk = existingDates[i];
+      if (keepDates[dk] && Array.isArray(map[dk])) {
+        cleaned[dk] = map[dk];
+      }
+    }
+
+    if (!Array.isArray(cleaned[dateIso])) {
+      cleaned[dateIso] = [];
+    }
+    cleaned[dateIso].push({
+      g: guideNorm,
+      k: tourKey,
+      o: tripOpt
+    });
+
+    // Keep list bounded
+    if (cleaned[dateIso].length > 100) {
+      cleaned[dateIso] = cleaned[dateIso].slice(-100);
+    }
+    saveJsonPropObject(SUBMITTED_REPORTS_PROP_KEY, cleaned);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function pushDefaultDurationMinutes(headerTitle, cellText) {
+  var combined = (String(headerTitle || "") + " " + String(cellText || "")).toLowerCase();
+  if (
+    combined.indexOf("hill hike") !== -1 ||
+    combined.indexOf("w 104") !== -1 ||
+    combined.indexOf("brosmetind") !== -1 ||
+    combined.indexOf("nattmål") !== -1 ||
+    combined.indexOf("tverrfjell") !== -1 ||
+    combined.indexOf("rundfjell") !== -1 ||
+    combined.indexOf("sightseeing hike") !== -1 ||
+    combined.indexOf("hike") !== -1
+  ) {
+    return 300;
+  }
+  if (
+    combined.indexOf("coffe") !== -1 ||
+    combined.indexOf("coffee") !== -1 ||
+    combined.indexOf("cafe") !== -1 ||
+    combined.indexOf("tove") !== -1 ||
+    combined.indexOf("malangen") !== -1
+  ) {
+    return 270;
+  }
+  var isShip =
+    combined.indexOf("14:15") !== -1 ||
+    combined.indexOf("14.15") !== -1 ||
+    /\bhg\b/.test(combined) ||
+    /\bm5\b/.test(combined) ||
+    /\bn5\b/.test(combined);
+  if (
+    !isShip &&
+    (combined.indexOf("w 103") !== -1 ||
+      (combined.indexOf("snowshoe") !== -1 && combined.indexOf("10:00") !== -1) ||
+      (combined.indexOf("snowshoe") !== -1 && combined.indexOf("10.00") !== -1))
+  ) {
+    return 150;
+  }
+  return 180;
+}
+
+function pushExtractGuideToursForRow(headerRow, row, fontLineRow, noteRow, initials) {
+  var tours = [];
+
+  for (var c = 22; c < Math.min(66, headerRow.length); c++) {
+    var headerTitle = pushNormalizeHeader(headerRow[c]);
+    if (!pushIsTourColumn(c, headerTitle)) continue;
+
+    var cellText = String(row[c] || "").trim();
+    if (!cellText) continue;
+
+    var lowerCell = cellText.toLowerCase();
+    if (
+      lowerCell.indexOf("closed") !== -1 ||
+      lowerCell.indexOf("canceled") !== -1 ||
+      lowerCell.indexOf("cancelled") !== -1
+    ) {
+      continue;
+    }
+
+    var fl = String((fontLineRow && fontLineRow[c]) || "").toLowerCase();
+    if (fl.indexOf("line-through") !== -1) continue;
+
+    var split = pushSplitDriverClause(cellText);
+    var isGuideMatch = pushCellContainsInitials(split.guideText, initials);
+    var isDriverMatch =
+      split.driverText.length > 0 && pushCellContainsInitials(split.driverText, initials);
+    if (!isGuideMatch && !isDriverMatch) continue;
+    var isDriverOnly = !isGuideMatch && isDriverMatch;
+
+    var h1 = pushNormalizeHeader(headerRow[c + 1]).toLowerCase();
+    var h2 = pushNormalizeHeader(headerRow[c + 2]).toLowerCase();
+    var h3 = pushNormalizeHeader(headerRow[c + 3]).toLowerCase();
+    var isShipBlock = h1 === "forecast" && h2 === "on board" && h3 === "shop";
+
+    var shipName = null;
+    if (isShipBlock) {
+      var maxShipCol = Math.max(c + 8, PUSH_SHIP_COL_BB);
+      for (var s = c + 4; s <= Math.min(maxShipCol, headerRow.length - 1); s++) {
+        if (pushNormalizeHeader(headerRow[s]).toLowerCase() === "ship" || s === PUSH_SHIP_COL_BB) {
+          var rawShip = String(row[s] || "").trim();
+          if (rawShip) {
+            shipName = pushDetectShip(rawShip) || rawShip;
+            break;
+          }
+        }
+      }
+    }
+
+    var noteText = String((noteRow && noteRow[c]) || "").trim();
+    var combinedText = noteText ? cellText + "\n" + noteText : cellText;
+    if (!shipName) {
+      shipName = pushDetectShip(combinedText);
+    }
+
+    var parsedTime =
+      pushParseStartTime(cellText) ||
+      (noteText ? pushParseStartTime(noteText) : null) ||
+      pushParseStartTime(headerTitle);
+
+    var startMinutes = parsedTime ? parsedTime.startMinutes : null;
+    var defaultDur = pushDefaultDurationMinutes(headerTitle, combinedText);
+    var endMinutes =
+      parsedTime && parsedTime.endMinutes !== null
+        ? parsedTime.endMinutes
+        : startMinutes !== null
+          ? startMinutes + defaultDur
+          : null;
+
+    var displayName = pushBuildDisplayName(headerTitle, combinedText, shipName);
+    var category = pushInferCategory(headerTitle, combinedText);
+
+    tours.push({
+      colIndex: c,
+      headerTitle: headerTitle,
+      tourName: displayName,
+      category: category,
+      startMinutes: startMinutes !== null ? startMinutes : 9999,
+      endMinutes: endMinutes,
+      startLabel: parsedTime ? parsedTime.startLabel : "",
+      endLabel:
+        parsedTime && parsedTime.endLabel
+          ? parsedTime.endLabel
+          : endMinutes !== null
+            ? pushFormatHHMM(endMinutes)
+            : "",
+      isDriverOnly: isDriverOnly
+    });
+  }
+
+  tours.sort(function(a, b) { return a.startMinutes - b.startMinutes; });
+  return tours;
+}
+
+function guideNameMatchesSubscriber(submittedGuideNorm, subscriber) {
+  if (!submittedGuideNorm) return false;
+  var subNorm = pushNormalizeName((subscriber && subscriber.fullName) || "");
+  var subInit = String((subscriber && subscriber.initials) || "").trim().toLowerCase();
+  if (subNorm) {
+    if (submittedGuideNorm === subNorm) return true;
+    var subFirst = subNorm.split(" ")[0] || "";
+    var repFirst = submittedGuideNorm.split(" ")[0] || "";
+    if (subFirst.length >= 2 && subFirst === repFirst) return true;
+  }
+  if (subInit && submittedGuideNorm === subInit) return true;
+  return false;
+}
+
+function isTourReportSubmittedOnServer(submittedList, todayIso, subscriber, tour, tourIdx, guidedTourCount) {
+  if (!Array.isArray(submittedList) || submittedList.length === 0) return false;
+  var expectedKey = todayIso + "_" + tour.tourName.replace(/\s+/g, "_") + "_" + tourIdx;
+  var tourLower = (tour.tourName + " " + tour.category + " " + tour.headerTitle).toLowerCase();
+
+  for (var i = 0; i < submittedList.length; i++) {
+    var rec = submittedList[i];
+    if (!rec) continue;
+    if (rec.k && rec.k === expectedKey) return true;
+    if (!guideNameMatchesSubscriber(rec.g, subscriber)) continue;
+
+    // If the guide only has 1 guided tour today, any report submitted by them today covers it
+    if (guidedTourCount <= 1) return true;
+
+    // On multi-tour days, match by tour kind/keyword
+    var opt = String(rec.o || "").toLowerCase();
+    if (!opt) continue;
+    if (opt.indexOf("hill") !== -1 && tourLower.indexOf("hill") !== -1) return true;
+    if (opt.indexOf("coffee") !== -1 && tourLower.indexOf("coffee") !== -1) return true;
+    if (opt.indexOf("14:15") !== -1 && tourLower.indexOf("hg") !== -1) return true;
+    if (opt.indexOf("bike") !== -1 && (tourLower.indexOf("bike") !== -1 || tourLower.indexOf("fatbik") !== -1)) return true;
+    if (opt.indexOf("ski") !== -1 && tourLower.indexOf("ski") !== -1) return true;
+    if (opt.indexOf("snowshoe") !== -1 && tourLower.indexOf("snowshoe") !== -1) return true;
+  }
+  return false;
+}
+
+/**
+ * Runs every 15 minutes via Apps Script trigger.
+ * Sends FCM HTTP v1 Web Push post-trip report reminders (~15-30 min after a guided tour ends)
+ * to registered Web / iPhone PWA guides who haven't submitted their report yet.
+ */
+function checkAndSendPostTripWebNotifications() {
+  var now = new Date();
+  var osloHour = parseInt(Utilities.formatDate(now, "Europe/Oslo", "H"), 10);
+  var osloMinute = parseInt(Utilities.formatDate(now, "Europe/Oslo", "m"), 10);
+  var nowMinutes = osloHour * 60 + osloMinute;
+
+  // Only active during tour finish hours (10:30 - 21:30 Europe/Oslo)
+  if (nowMinutes < 630 || nowMinutes > 1290) {
+    return;
+  }
+
+  var webSubs = loadWebPushSubscribers();
+  var webTokens = Object.keys(webSubs);
+  if (webTokens.length === 0) {
+    return;
+  }
+
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheets()[0];
+  if (!sheet) return;
+
+  var lastRow = Math.min(sheet.getLastRow(), MAX_ROWS);
+  var lastCol = Math.min(sheet.getLastColumn(), MAX_COLS);
+  if (lastRow < 3 || lastCol < 25) return;
+
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var headerRow = values[1] || [];
+
+  var monthIdx = parseInt(Utilities.formatDate(now, "Europe/Oslo", "M"), 10) - 1;
+  var dayNum = parseInt(Utilities.formatDate(now, "Europe/Oslo", "d"), 10);
+  var monthName = MONTH_NAMES[monthIdx] || "";
+  var todayIso = Utilities.formatDate(now, "Europe/Oslo", "yyyy-MM-dd");
+
+  var rowIdx = pushFindRowForOsloDate(values, monthName, dayNum);
+  if (rowIdx === -1) return;
+
+  var row = values[rowIdx] || [];
+  var todayRange = sheet.getRange(rowIdx + 1, 1, 1, lastCol);
+  var fontLineRow = todayRange.getFontLines()[0] || [];
+  var noteRow = todayRange.getNotes()[0] || [];
+
+  var submittedMap = loadJsonPropObject(SUBMITTED_REPORTS_PROP_KEY);
+  var todaySubmitted = Array.isArray(submittedMap[todayIso]) ? submittedMap[todayIso] : [];
+  var sentMap = loadJsonPropObject(POST_TRIP_SENT_PROP_KEY);
+
+  var accessToken = null;
+  var staleWebTokens = [];
+  var newlySentKeys = [];
+  var sentCount = 0;
+
+  for (var i = 0; i < webTokens.length; i++) {
+    var sub = webSubs[webTokens[i]];
+    if (!sub || !sub.fcmToken || !sub.initials) continue;
+
+    var tours = pushExtractGuideToursForRow(headerRow, row, fontLineRow, noteRow, sub.initials);
+    if (tours.length === 0) continue;
+
+    var guidedTourCount = 0;
+    for (var g = 0; g < tours.length; g++) {
+      if (!tours[g].isDriverOnly) guidedTourCount++;
+    }
+
+    for (var t = 0; t < tours.length; t++) {
+      var tour = tours[t];
+      if (tour.isDriverOnly) continue;
+      if (tour.endMinutes === null) continue;
+
+      var remindAt = tour.endMinutes + 15;
+      if (nowMinutes < remindAt || nowMinutes > tour.endMinutes + 180) continue;
+
+      var sentKey = todayIso + "|" + sub.fcmToken.slice(0, 32) + "|c" + tour.colIndex;
+      if (sentMap[sentKey]) continue;
+
+      if (isTourReportSubmittedOnServer(todaySubmitted, todayIso, sub, tour, t, guidedTourCount)) {
+        continue;
+      }
+
+      if (!accessToken) {
+        accessToken = getFcmV1AccessToken();
+        if (!accessToken) return;
+      }
+
+      var tourKey = todayIso + "_" + tour.tourName.replace(/\s+/g, "_") + "_" + t;
+      var title = "Post-Trip Report Reminder";
+      var body = tour.endLabel
+        ? tour.tourName + " ended at " + tour.endLabel + ". Tap to submit your post-trip report."
+        : "Don't forget to submit your post-trip report for " + tour.tourName + ".";
+
+      var fcmPayload = {
+        message: {
+          token: sub.fcmToken,
+          data: {
+            title: title,
+            body: body,
+            type: "trip_report",
+            dateIso: todayIso,
+            targetDateIso: todayIso,
+            tourIdx: String(t),
+            tourKey: tourKey,
+            openReport: "1"
+          },
+          webpush: {
+            headers: {
+              Urgency: "high",
+              TTL: "10800"
+            }
+          }
+        }
+      };
+
+      var res = UrlFetchApp.fetch(FCM_SEND_URL, {
+        method: "post",
+        contentType: "application/json",
+        headers: {
+          Authorization: "Bearer " + accessToken,
+          Accept: "application/json"
+        },
+        payload: JSON.stringify(fcmPayload),
+        muteHttpExceptions: true
+      });
+
+      var code = res.getResponseCode();
+      var text = res.getContentText();
+      if (code >= 200 && code < 300) {
+        sentCount++;
+        newlySentKeys.push(sentKey);
+        sentMap[sentKey] = true;
+      } else {
+        Logger.log("Post-trip Web Push HTTP " + code + " for " + sub.initials + ": " + text);
+        if (code === 404 || text.indexOf("UNREGISTERED") !== -1) {
+          staleWebTokens.push(sub.fcmToken);
+          break;
+        }
+      }
+    }
+  }
+
+  if (newlySentKeys.length > 0) {
+    var keepDates = getRecentOsloDateSet(1);
+    var lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      var latestSent = loadJsonPropObject(POST_TRIP_SENT_PROP_KEY);
+      var prunedSent = {};
+      var oldKeys = Object.keys(latestSent);
+      for (var k = 0; k < oldKeys.length; k++) {
+        var prefixDate = oldKeys[k].slice(0, 10);
+        if (keepDates[prefixDate]) {
+          prunedSent[oldKeys[k]] = true;
+        }
+      }
+      for (var n = 0; n < newlySentKeys.length; n++) {
+        prunedSent[newlySentKeys[n]] = true;
+      }
+      saveJsonPropObject(POST_TRIP_SENT_PROP_KEY, prunedSent);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (staleWebTokens.length > 0) {
+    var tokenLock = LockService.getScriptLock();
+    tokenLock.waitLock(10000);
+    try {
+      var currentWebSubs = loadWebPushSubscribers();
+      for (var st = 0; st < staleWebTokens.length; st++) {
+        delete currentWebSubs[staleWebTokens[st]];
+      }
+      saveWebPushSubscribers(currentWebSubs);
+    } finally {
+      tokenLock.releaseLock();
+    }
+  }
+
+  if (sentCount > 0) {
+    Logger.log("Sent " + sentCount + " post-trip report Web Push reminder(s) for " + todayIso + ".");
+  }
+}
+
+/**
+ * Run ONCE in Apps Script Editor to enable 15-minute post-trip report Web Push checks
+ * for iPhone PWA and desktop web guides.
+ */
+function setupPostTripReportTrigger() {
+  var existing = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < existing.length; i++) {
+    if (existing[i].getHandlerFunction() === "checkAndSendPostTripWebNotifications") {
+      ScriptApp.deleteTrigger(existing[i]);
+    }
+  }
+  ScriptApp.newTrigger("checkAndSendPostTripWebNotifications")
+    .timeBased()
+    .everyMinutes(15)
+    .create();
+  Logger.log("15-minute trigger created for checkAndSendPostTripWebNotifications.");
+}
+

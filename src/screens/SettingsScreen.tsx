@@ -352,7 +352,7 @@ export function SettingsScreen() {
         <Text style={styles.saveBtnText}>{saved ? 'Preferences Saved!' : 'Save Settings'}</Text>
       </Pressable>
 
-      {/* 4b. Web / iPhone PWA 18:30 Push Notifications */}
+      {/* 4b. Web / iPhone PWA Push Notifications (18:30 Schedule + Post-Trip Reports) */}
       {Platform.OS === 'web' ? (
         <View
           style={[
@@ -369,8 +369,8 @@ export function SettingsScreen() {
             <View style={styles.contractTextCol}>
               <Text style={styles.previewTitle}>
                 {webPushStatus === 'active'
-                  ? '18:30 Push Notifications Active'
-                  : '18:30 Tomorrow Schedule Push'}
+                  ? 'Push Notifications Active'
+                  : 'Schedule & Report Push Notifications'}
               </Text>
               <Text style={styles.previewSub}>
                 {webPushStatus === 'needs_home_screen'
@@ -380,8 +380,8 @@ export function SettingsScreen() {
                     : webPushStatus === 'unsupported'
                       ? 'This browser does not support Web Push (requires iOS 16.4+ Home Screen app or Chrome/Safari).'
                       : webPushStatus === 'active'
-                        ? 'This device will receive live 18:30 tomorrow schedule updates from Sheet 1.6.'
-                        : 'Tap below to allow live 18:30 tomorrow schedule push notifications on this device.'}
+                        ? 'This device receives live 18:30 tomorrow schedule updates and post-trip report reminders from Sheet 1.6.'
+                        : 'Tap below to allow live 18:30 tomorrow schedule updates and post-trip report reminders on this device.'}
               </Text>
             </View>
           </View>
@@ -416,7 +416,7 @@ export function SettingsScreen() {
               >
                 {webPushStatus === 'active'
                   ? 'Re-sync Push Registration'
-                  : 'Enable 18:30 Push Notifications'}
+                  : 'Enable Push Notifications'}
               </Text>
             </Pressable>
           ) : null}
